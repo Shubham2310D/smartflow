@@ -168,14 +168,27 @@ st.divider()
 
 d1, d2, d3 = st.columns(3)
 
+def _info_box(label: str, value: str):
+    st.markdown(
+        f"""
+        <div style="padding:12px 16px;border-radius:8px;
+                    background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);">
+          <div style="font-size:0.8em;color:#aaa;margin-bottom:4px;">{label}</div>
+          <div style="font-size:1.2em;font-weight:600;word-wrap:break-word;
+                      overflow-wrap:break-word;white-space:normal;">{value}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
 with d1:
-    st.metric("Dispatch From",  rec["dispatch_from"])
+    _info_box("Dispatch From", rec["dispatch_from"])
 
 with d2:
-    st.metric("Event Cause",    CAUSE_DISPLAY.get(cause_key, cause_key))
+    _info_box("Event Cause", CAUSE_DISPLAY.get(cause_key, cause_key))
 
 with d3:
-    st.metric("Peak Hour",      "Yes" if rec["is_peak_hour"] else "No")
+    _info_box("Peak Hour", "Yes" if rec["is_peak_hour"] else "No")
 
 # Rationale
 st.divider()
