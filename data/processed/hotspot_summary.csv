@@ -1,0 +1,11 @@
+cluster_id,junction,event_count,dominant_cause,dominant_severity,avg_duration_minutes,zone,centroid_lat,centroid_lon
+6,Sankey Road,764,vehicle_breakdown,Medium,50.2,Central Zone 2,13.01047,77.5861
+19,Bhashyam Main Road,592,vehicle_breakdown,Medium,45.7,West Zone 2,12.96725,77.55895
+0,Outer Ring Road,437,vehicle_breakdown,Medium,42.4,West Zone 1,13.03716,77.53633
+8,Bellary Road,297,vehicle_breakdown,Medium,59.4,North Zone 2,13.09445,77.59878
+42,Halsuru Gate Police Station Junction,276,vehicle_breakdown,Medium,41.0,Central Zone 2,12.96451,77.58859
+10,1st Cross Road,260,vehicle_breakdown,Medium,46.4,South Zone 2,12.91902,77.6223
+62,MBT Road,202,vehicle_breakdown,Medium,100.6,North Zone 1,13.03862,77.62206
+25,CV Raman Road,182,vehicle_breakdown,Medium,43.0,West Zone 2,13.01607,77.56069
+22,Hesaragatta Cross Junction,136,vehicle_breakdown,Low,34.0,West Zone 1,13.04751,77.50083
+24,Outer Ring Road,133,construction,Medium,725.2,East Zone 1,12.9696,77.70059
