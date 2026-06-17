@@ -174,24 +174,27 @@ if geojson and show_clusters:
         ],
     }
 
-    def _style(feature):
-        count = feature["properties"].get("event_count", 0)
-        opacity = min(0.7, 0.2 + count / 200)
-        return {"fillColor": "#ff6b35", "color": "#ff6b35",
-                "weight": 2, "fillOpacity": opacity}
+    if filtered_geojson["features"]:   # only render when there is something to show
+        def _style(feature):
+            count = feature["properties"].get("event_count", 0)
+            opacity = min(0.7, 0.2 + count / 200)
+            return {"fillColor": "#ff6b35", "color": "#ff6b35",
+                    "weight": 2, "fillOpacity": opacity}
 
-    folium.GeoJson(
-        filtered_geojson,
-        name="Hotspot Clusters",
-        style_function=_style,
-        tooltip=folium.GeoJsonTooltip(
-            fields=["top_junction", "event_count", "dominant_cause",
-                    "avg_duration_minutes", "zone"],
-            aliases=["Junction:", "Events:", "Main Cause:",
-                     "Avg Duration (min):", "Zone:"],
-            localize=True,
-        ),
-    ).add_to(m)
+        folium.GeoJson(
+            filtered_geojson,
+            name="Hotspot Clusters",
+            style_function=_style,
+            tooltip=folium.GeoJsonTooltip(
+                fields=["top_junction", "event_count", "dominant_cause",
+                        "avg_duration_minutes", "zone"],
+                aliases=["Junction:", "Events:", "Main Cause:",
+                         "Avg Duration (min):", "Zone:"],
+                localize=True,
+            ),
+        ).add_to(m)
+    else:
+        st.info("No clusters match the current filters.")
 
 # Layer 3: Individual event markers (via MarkerCluster for performance)
 if show_markers and len(fdf) > 0:
