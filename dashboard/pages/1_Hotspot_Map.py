@@ -130,13 +130,17 @@ c1, c2, c3, c4 = st.columns(4)
 c1.metric("Filtered Events", f"{len(fdf):,}")
 c2.metric("High Severity",   f"{(fdf['severity_class']=='High').sum():,}")
 c3.metric("Corridors",       fdf["corridor"].nunique())
-c4.metric("Clusters",
-          len(geojson["features"]) if geojson else "—")
+filtered_cluster_count = len([
+    f for f in geojson["features"]
+    if f["properties"].get("zone") in sel_zones
+    and f["properties"].get("dominant_cause") in sel_causes
+]) if geojson else 0
+c4.metric("Clusters", filtered_cluster_count)
 
 st.divider()
 
 # ---------------------------------------------------------------------------
-# Build Folium map
+# Build Folium map — all layers derived from filtered fdf
 # ---------------------------------------------------------------------------
 
 m = folium.Map(
@@ -145,10 +149,12 @@ m = folium.Map(
     tiles="CartoDB dark_matter",
 )
 
-# Layer 1: KDE heatmap
-if heat_pts:
+# Layer 1: Heatmap from filtered events (raw points — reacts to filters)
+if len(fdf) > 0:
+    filtered_heat = fdf[["latitude", "longitude"]].dropna().values.tolist()
+    filtered_heat = [[row[0], row[1], 1.0] for row in filtered_heat]
     HeatMap(
-        heat_pts,
+        filtered_heat,
         name="Density Heatmap",
         min_opacity=0.3,
         max_zoom=16,
@@ -157,8 +163,17 @@ if heat_pts:
         gradient={0.2: "blue", 0.45: "lime", 0.65: "yellow", 1.0: "red"},
     ).add_to(m)
 
-# Layer 2: DBSCAN cluster polygons
+# Layer 2: Cluster polygons — filtered by selected zones and causes
 if geojson and show_clusters:
+    filtered_geojson = {
+        "type": "FeatureCollection",
+        "features": [
+            f for f in geojson["features"]
+            if f["properties"].get("zone") in sel_zones
+            and f["properties"].get("dominant_cause") in sel_causes
+        ],
+    }
+
     def _style(feature):
         count = feature["properties"].get("event_count", 0)
         opacity = min(0.7, 0.2 + count / 200)
@@ -166,7 +181,7 @@ if geojson and show_clusters:
                 "weight": 2, "fillOpacity": opacity}
 
     folium.GeoJson(
-        geojson,
+        filtered_geojson,
         name="Hotspot Clusters",
         style_function=_style,
         tooltip=folium.GeoJsonTooltip(
@@ -208,12 +223,16 @@ st_folium(m, width=None, height=600, returned_objects=[])
 
 if summary is not None and len(summary) > 0:
     st.subheader("Top Hotspot Junctions")
+    filtered_summary = summary[
+        summary["zone"].isin(sel_zones) &
+        summary["dominant_cause"].isin(sel_causes)
+    ]
     display_cols = [c for c in
         ["junction", "event_count", "dominant_cause",
          "avg_duration_minutes", "dominant_severity", "zone"]
-        if c in summary.columns]
+        if c in filtered_summary.columns]
     st.dataframe(
-        summary[display_cols].rename(columns={
+        filtered_summary[display_cols].rename(columns={
             "junction":             "Junction",
             "event_count":          "Events",
             "dominant_cause":       "Main Cause",
