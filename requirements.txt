@@ -1,0 +1,29 @@
+# SmartFlow — Python 3.13 compatible requirements
+# Install with:  pip install --prefer-binary -r requirements.txt
+
+# Core data
+pandas>=2.2.0
+numpy>=2.1.0
+scipy>=1.14.0
+
+# Machine learning
+scikit-learn>=1.5.0
+xgboost>=2.1.0
+joblib>=1.4.0
+
+# Dashboard
+streamlit>=1.35.0
+streamlit-folium>=0.20.0
+plotly>=5.22.0
+folium>=0.16.0
+
+# Config
+pyyaml>=6.0
+
+# Optional — Moran's I spatial autocorrelation (install separately if needed):
+#   pip install esda libpysal
+
+# Optional — SHAP explainability (install separately if available for Python 3.13):
+#   pip install shap
+
+# NOT required — removed geopandas/geopy (code uses scipy for geometry)

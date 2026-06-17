@@ -1,0 +1,43 @@
+map:
+  center_lat: 12.97
+  center_lon: 77.59
+  zoom_start: 12
+
+paths:
+  raw_csv: data/raw/events.csv
+  clean_csv: data/processed/clean.csv
+  features_csv: data/processed/features.csv
+  model_ready_csv: data/processed/model_ready.csv
+  hotspots_geojson: data/processed/hotspots.geojson
+  severity_model: models/severity_classifier.pkl
+  duration_model: models/duration_predictor.pkl
+  label_encoders: models/label_encoders.pkl
+
+hotspot:
+  dbscan_eps: 0.005        # ~500 m in decimal degrees at Bengaluru latitude
+  dbscan_min_samples: 5
+  kde_bandwidth: 0.01
+  moran_significance: 0.05
+
+severity_scoring:
+  # score thresholds: total >= high_threshold → High, >= medium_threshold → Medium
+  high_threshold: 4
+  medium_threshold: 2
+
+duration:
+  max_minutes: 10080       # 7 days — cap for stale open tickets
+
+resource_rules:
+  base_personnel:
+    Low: 2
+    Medium: 3
+    High: 5
+  peak_hour_bonus: 1
+  road_closure_bonus: 1
+  high_risk_cause_bonus: 1   # accident, flood, water_logging
+  barricade_causes:
+    - accident
+    - tree_fall
+    - flood
+    - water_logging
+  diversion_min_severity: High

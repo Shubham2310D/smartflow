@@ -1,0 +1,202 @@
+"""
+Page 3 — Resource Plan
+Shows deployment recommendation card based on the last prediction (Page 2)
+or a standalone form if no prediction is in session_state.
+"""
+
+import sys
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_ROOT / "src"))
+
+import streamlit as st
+
+from resource_recommender import recommend
+from utils import ALL_CAUSES, ALL_ZONES, CAUSE_DISPLAY
+
+st.set_page_config(page_title="Resource Plan | SmartFlow", page_icon="🚔", layout="wide")
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+_FLAG_COLOR = {"URGENT": "#dc3545", "PRIORITY": "#ffc107", "ROUTINE": "#28a745"}
+_SEV_COLOR  = {"High":   "#dc3545", "Medium":   "#ffc107", "Low":     "#28a745"}
+
+
+def _card(label: str, value, unit: str = "", color: str = "#0d6efd"):
+    st.markdown(
+        f"""
+        <div style="background:{color};color:white;padding:16px 20px;
+                    border-radius:10px;text-align:center;margin-bottom:4px;">
+          <div style="font-size:0.85em;opacity:0.85;">{label}</div>
+          <div style="font-size:1.8em;font-weight:700;">{value}{(' ' + unit) if unit else ''}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Populate inputs from session_state (last prediction) or defaults
+# ---------------------------------------------------------------------------
+
+prev = st.session_state.get("last_prediction")
+
+st.title("Resource Deployment Plan")
+st.caption("Personnel and logistics recommendation for traffic officers")
+
+# ---------------------------------------------------------------------------
+# Optional override form (sidebar)
+# ---------------------------------------------------------------------------
+
+with st.sidebar:
+    st.header("Override Inputs")
+    st.caption("Values pre-filled from the last prediction on Page 2.")
+
+    if prev:
+        default_sev     = prev["severity"]
+        default_cause   = prev["event_cause"]
+        default_closure = prev["road_closure"]
+        default_hour    = prev["hour_of_day"]
+        default_zone    = prev["zone"]
+        default_dur     = prev["duration_minutes"]
+    else:
+        default_sev, default_cause, default_closure = "Medium", "vehicle_breakdown", False
+        default_hour, default_zone, default_dur     = 9, "Central Zone 1", None
+
+    sev_choice = st.selectbox(
+        "Severity", ["High", "Medium", "Low"],
+        index=["High", "Medium", "Low"].index(default_sev),
+    )
+
+    cause_display_list = [CAUSE_DISPLAY.get(c, c) for c in ALL_CAUSES]
+    default_cause_display = CAUSE_DISPLAY.get(default_cause, default_cause)
+    if default_cause_display not in cause_display_list:
+        default_cause_display = cause_display_list[0]
+    cause_sel = st.selectbox(
+        "Event Cause", cause_display_list,
+        index=cause_display_list.index(default_cause_display),
+    )
+    cause_key = ALL_CAUSES[cause_display_list.index(cause_sel)]
+
+    closure_sel = st.checkbox("Road Closure", value=bool(default_closure))
+    hour_sel    = st.slider("Hour of Day", 0, 23, int(default_hour))
+    zone_sel    = st.selectbox(
+        "Zone", ALL_ZONES,
+        index=ALL_ZONES.index(default_zone) if default_zone in ALL_ZONES else 0,
+    )
+
+    dur_override = st.number_input(
+        "Predicted duration (min, 0 = auto)",
+        min_value=0, max_value=10080,
+        value=int(default_dur) if default_dur else 0,
+    )
+
+    recalc = st.button("Recalculate", type="primary", use_container_width=True)
+
+# ---------------------------------------------------------------------------
+# Compute recommendation
+# ---------------------------------------------------------------------------
+
+duration_for_rec = float(dur_override) if dur_override > 0 else (
+    default_dur if default_dur else None
+)
+
+rec = recommend(
+    severity_class        = sev_choice,
+    event_cause           = cause_key,
+    requires_road_closure = closure_sel,
+    hour_of_day           = hour_sel,
+    zone                  = zone_sel,
+    duration_minutes      = duration_for_rec,
+)
+
+# ---------------------------------------------------------------------------
+# Priority banner
+# ---------------------------------------------------------------------------
+
+flag       = rec["priority_flag"]
+flag_color = _FLAG_COLOR.get(flag, "#6c757d")
+sev_color  = _SEV_COLOR.get(sev_choice, "#6c757d")
+
+st.markdown(
+    f"""
+    <div style="background:{flag_color};color:white;padding:14px 24px;
+                border-radius:12px;text-align:center;font-size:1.5em;
+                font-weight:800;letter-spacing:0.1em;margin-bottom:20px;">
+        {flag}
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+if prev and not recalc:
+    st.info(
+        f"Showing recommendation for the prediction from Page 2 — "
+        f"**{prev['severity']}** severity, cause: **{CAUSE_DISPLAY.get(prev['event_cause'], prev['event_cause'])}**"
+    )
+
+# ---------------------------------------------------------------------------
+# Main cards
+# ---------------------------------------------------------------------------
+
+c1, c2, c3, c4 = st.columns(4)
+
+with c1:
+    _card("Personnel to Deploy", rec["personnel_count"], "officers", "#0d6efd")
+
+with c2:
+    bar_val   = "YES" if rec["barricade_required"] else "NO"
+    bar_color = "#dc3545" if rec["barricade_required"] else "#6c757d"
+    _card("Barricade Required", bar_val, color=bar_color)
+
+with c3:
+    div_val   = "YES" if rec["diversion_recommended"] else "NO"
+    div_color = "#fd7e14" if rec["diversion_recommended"] else "#6c757d"
+    _card("Diversion Recommended", div_val, color=div_color)
+
+with c4:
+    _card("Estimated Clearance", rec["estimated_clearance_minutes"], "min", "#198754")
+
+st.divider()
+
+# ---------------------------------------------------------------------------
+# Dispatch & context
+# ---------------------------------------------------------------------------
+
+d1, d2, d3 = st.columns(3)
+
+with d1:
+    st.metric("Dispatch From",  rec["dispatch_from"])
+
+with d2:
+    st.metric("Event Cause",    CAUSE_DISPLAY.get(cause_key, cause_key))
+
+with d3:
+    st.metric("Peak Hour",      "Yes" if rec["is_peak_hour"] else "No")
+
+# Rationale
+st.divider()
+st.subheader("Decision Rationale")
+st.markdown(
+    f"> {rec['rationale']}"
+)
+
+# ---------------------------------------------------------------------------
+# Scoring breakdown table
+# ---------------------------------------------------------------------------
+
+with st.expander("Scoring Breakdown"):
+    base = {"Low": 2, "Medium": 3, "High": 5}[sev_choice]
+    peak_bonus    = 1 if rec["is_peak_hour"] and sev_choice in {"Medium", "High"} else 0
+    closure_bonus = 1 if closure_sel else 0
+    cause_bonus   = 1 if cause_key in {"accident", "flood", "water_logging"} else 0
+
+    import pandas as pd
+    breakdown = pd.DataFrame({
+        "Factor":     ["Base personnel", "Peak hour bonus", "Road closure bonus", "High-risk cause bonus", "TOTAL"],
+        "Points":     [base, peak_bonus, closure_bonus, cause_bonus, base + peak_bonus + closure_bonus + cause_bonus],
+    })
+    st.table(breakdown)
