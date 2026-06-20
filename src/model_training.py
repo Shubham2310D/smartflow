@@ -47,9 +47,14 @@ CLF_FEATURES = [
 # Duration predictor — cause/closure are legitimate here.
 # duration_minutes is an observed real value, not derived from these fields.
 # Road closures and accident causes genuinely take longer to clear.
+# event_semantic_encoded (derived from the free-text description) is included
+# ONLY here, never in the severity classifier: severity's label is partly
+# derived from cause, so a text-derived cause-proxy would re-introduce leakage
+# on the classifier — but for an observed target like duration it is legitimate.
 REG_FEATURES = [
     "cause_severity_weight",
     "road_closure_binary",
+    "event_semantic_encoded",
     "hour_of_day",
     "day_of_week",
     "month",
@@ -101,12 +106,27 @@ def load_model_ready(project_root: Path) -> pd.DataFrame:
         raise FileNotFoundError(
             f"{path} not found. Run feature_engineering.py first."
         )
-    df = pd.read_csv(path)
+    df = pd.read_csv(path, parse_dates=["start_datetime"])
     df["severity_label"] = df["severity_class"].map(SEVERITY_LABEL_MAP)
     all_features = list(dict.fromkeys(CLF_FEATURES + REG_FEATURES))
     df = df.dropna(subset=all_features + ["severity_class"]).reset_index(drop=True)
+    # Sort chronologically so train/test splits respect time order (no leakage).
+    if "start_datetime" in df.columns:
+        df = df.sort_values("start_datetime", kind="stable").reset_index(drop=True)
     logger.info("Training dataset: %d rows", len(df))
     return df
+
+
+def _chronological_split(X: pd.DataFrame, y, test_frac: float = 0.2):
+    """
+    Split into train (earlier events) and test (later events) by row order.
+    Assumes the input is already sorted chronologically.  This is the honest
+    way to validate an operational forecasting model: you only ever train on
+    the past and predict the future, never the reverse.
+    """
+    n = len(X)
+    cut = int(n * (1 - test_frac))
+    return X.iloc[:cut], X.iloc[cut:], y.iloc[:cut], y.iloc[cut:]
 
 
 # ---------------------------------------------------------------------------
@@ -117,24 +137,35 @@ def train_severity_classifier(df: pd.DataFrame, models_dir: Path) -> XGBClassifi
     X = df[CLF_FEATURES].fillna(0).astype(float)
     y = df["severity_label"].astype(int)
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
-    )
+    # Honest, leakage-free validation: train on earlier events, test on later.
+    X_train, X_test, y_train, y_test = _chronological_split(X, y, test_frac=0.2)
 
     sample_weights = compute_sample_weight("balanced", y_train)
     clf = XGBClassifier(**XGB_CLF_PARAMS)
     clf.fit(X_train, y_train, sample_weight=sample_weights)
 
     y_pred = clf.predict(X_test)
+    from sklearn.metrics import accuracy_score, f1_score
+    test_acc = float(accuracy_score(y_test, y_pred))
+    test_f1  = float(f1_score(y_test, y_pred, average="macro"))
+    # Majority-class baseline on the test window, for honest comparison
+    baseline = float((y_test == y_train.mode().iloc[0]).mean())
     report = classification_report(
-        y_test, y_pred, target_names=["Low", "Medium", "High"]
+        y_test, y_pred, target_names=["Low", "Medium", "High"], zero_division=0
     )
-    logger.info("Severity classifier report:\n%s", report)
+    logger.info("Severity classifier (chronological holdout) report:\n%s", report)
     logger.info("Confusion matrix:\n%s", confusion_matrix(y_test, y_pred))
+    logger.info(
+        "Chronological holdout — accuracy: %.3f, macro-F1: %.3f, "
+        "majority baseline: %.3f", test_acc, test_f1, baseline,
+    )
 
-    # 5-fold stratified CV accuracy
+    # Random 5-fold CV — OPTIMISTIC (ignores time order); reported for reference only.
     cv_scores = cross_val_score(clf, X, y, cv=StratifiedKFold(5), scoring="accuracy")
-    logger.info("5-fold CV accuracy: %.3f ± %.3f", cv_scores.mean(), cv_scores.std())
+    logger.info(
+        "Random 5-fold CV accuracy (optimistic): %.3f ± %.3f",
+        cv_scores.mean(), cv_scores.std(),
+    )
 
     payload = {
         "model":           clf,
@@ -142,7 +173,10 @@ def train_severity_classifier(df: pd.DataFrame, models_dir: Path) -> XGBClassifi
         "label_map":       SEVERITY_LABEL_MAP,
         "inverse_map":     SEVERITY_INVERSE_MAP,
         "colors":          SEVERITY_COLORS,
-        "cv_accuracy_mean": float(cv_scores.mean()),
+        "test_accuracy":   test_acc,            # headline: chronological holdout
+        "test_macro_f1":   test_f1,
+        "baseline_accuracy": baseline,
+        "cv_accuracy_mean": float(cv_scores.mean()),   # optimistic, reference only
         "cv_accuracy_std":  float(cv_scores.std()),
     }
     joblib.dump(payload, models_dir / "severity_classifier.pkl")
@@ -166,14 +200,15 @@ def train_duration_predictor(df: pd.DataFrame, models_dir: Path) -> XGBRegressor
     df_reg = df_reg[df_reg["duration_minutes"] <= 1440].copy()
     logger.info("Regression training on %d rows (capped ≤ 1440 min)", len(df_reg))
 
+    # Keep chronological order so the split trains on the past, tests on the future.
+    df_reg = df_reg.sort_values("start_datetime", kind="stable").reset_index(drop=True) \
+        if "start_datetime" in df_reg.columns else df_reg
     X = df_reg[REG_FEATURES].fillna(0).astype(float)
     # Log1p transform to handle right-skewed distribution
     y_raw = df_reg["duration_minutes"].astype(float)
     y     = np.log1p(y_raw)
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42
-    )
+    X_train, X_test, y_train, y_test = _chronological_split(X, y, test_frac=0.2)
 
     reg = XGBRegressor(**XGB_REG_PARAMS)
     reg.fit(X_train, y_train)
@@ -184,9 +219,20 @@ def train_duration_predictor(df: pd.DataFrame, models_dir: Path) -> XGBRegressor
     mae   = mean_absolute_error(y_test_raw, y_pred)
     rmse  = float(np.sqrt(np.mean((y_test_raw - y_pred) ** 2)))
     r2    = r2_score(y_test_raw, y_pred)
+
+    # Naive baseline: always predict the training median (the MAE-optimal
+    # constant for a skewed target).  The model only "earns its place" if it
+    # beats this — report both so the MAE is never read in isolation.
+    train_median  = float(np.expm1(y_train).median())
+    baseline_mae  = mean_absolute_error(y_test_raw, np.full_like(y_test_raw, train_median))
+    lift = baseline_mae - mae
     logger.info(
         "Duration predictor — MAE: %.1f min, RMSE: %.1f min, R²: %.3f",
-        mae, rmse, r2
+        mae, rmse, r2,
+    )
+    logger.info(
+        "Duration baseline (predict-median=%.0f) MAE: %.1f min  →  model lift: %+.1f min",
+        train_median, baseline_mae, lift,
     )
 
     payload = {
@@ -196,9 +242,24 @@ def train_duration_predictor(df: pd.DataFrame, models_dir: Path) -> XGBRegressor
         "mae":          mae,
         "rmse":         rmse,
         "r2":           r2,
+        "baseline_mae": float(baseline_mae),
+        "baseline_median": train_median,
+        "lift_vs_baseline": float(lift),
     }
     joblib.dump(payload, models_dir / "duration_predictor.pkl")
     logger.info("Saved duration_predictor.pkl")
+
+    # Save the honest out-of-sample (chronological holdout) predicted-vs-actual
+    # pairs so the Feedback Loop dashboard can show real calibration, not an
+    # in-sample fit.
+    backtest = pd.DataFrame({
+        "actual_minutes":    np.round(y_test_raw, 1),
+        "predicted_minutes": np.round(y_pred, 1),
+    })
+    backtest_path = models_dir.parent / "data" / "processed" / "duration_backtest.csv"
+    backtest_path.parent.mkdir(parents=True, exist_ok=True)
+    backtest.to_csv(backtest_path, index=False)
+    logger.info("Saved duration_backtest.csv (%d holdout rows)", len(backtest))
 
     _save_shap_summary(
         reg, X_test, REG_FEATURES, models_dir / "shap_duration_summary.png",

@@ -12,6 +12,7 @@ sys.path.insert(0, str(_ROOT / "src"))
 
 import streamlit as st
 
+from outcomes_log import log_decision
 from resource_recommender import recommend
 from utils import ALL_CAUSES, ALL_ZONES, CAUSE_DISPLAY
 
@@ -213,3 +214,44 @@ with st.expander("Scoring Breakdown"):
         "Points":     [base, peak_bonus, closure_bonus, cause_bonus, base + peak_bonus + closure_bonus + cause_bonus],
     })
     st.table(breakdown)
+
+# ---------------------------------------------------------------------------
+# Record this decision into the learning loop
+# ---------------------------------------------------------------------------
+
+st.divider()
+st.subheader("Record Decision (Learning Loop)")
+st.caption(
+    "Log this recommendation so it can be compared against the real outcome later. "
+    "Recorded decisions feed the **Feedback Loop** page and future model retraining."
+)
+
+with st.form("log_decision_form"):
+    lc1, lc2, lc3 = st.columns(3)
+    with lc1:
+        actual_clearance = st.number_input(
+            "Actual clearance (min, 0 = not yet known)",
+            min_value=0, max_value=10080, value=0,
+        )
+    with lc2:
+        actual_sev = st.selectbox(
+            "Actual severity (optional)", ["(unknown)", "High", "Medium", "Low"],
+        )
+    with lc3:
+        followed = st.selectbox("Plan followed?", ["(unknown)", "yes", "no"])
+
+    log_clicked = st.form_submit_button("Log this decision", use_container_width=True)
+
+if log_clicked:
+    log_decision({
+        "event_cause":             cause_key,
+        "zone":                    zone_sel,
+        "hour_of_day":             hour_sel,
+        "predicted_severity":      sev_choice,
+        "predicted_clearance_min": rec["estimated_clearance_minutes"],
+        "recommended_personnel":   rec["personnel_count"],
+        "actual_clearance_min":    actual_clearance if actual_clearance > 0 else "",
+        "actual_severity":         "" if actual_sev == "(unknown)" else actual_sev,
+        "followed":                "" if followed == "(unknown)" else followed,
+    })
+    st.success("Decision logged. See the **Feedback Loop** page for predicted-vs-actual tracking.")

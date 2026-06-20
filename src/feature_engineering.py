@@ -18,6 +18,7 @@ New columns produced
 """
 
 import logging
+import re
 from pathlib import Path
 
 import numpy as np
@@ -25,16 +26,69 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Free-text event-type extraction (description field)
+# ---------------------------------------------------------------------------
+# The `description` field (83% populated, mixed English / Kannada / transliteration)
+# carries the real event semantics the structured `event_cause` column misses —
+# "Cricket Match at Chinnaswamy", "BWSSB work", "BMTC bus broken down", tree falls.
+# This is a lightweight bilingual keyword pass that derives an event_semantic_type.
+# Order matters: the first matching pattern wins (most specific first).
+SEMANTIC_PATTERNS: list[tuple[str, str]] = [
+    ("sports_event",      r"cricket|match|stadium|chinnaswamy|ಕ್ರಿಕೆಟ್|ಪಂದ್ಯ|ಕ್ರೀಡಾ"),
+    ("vip_movement",      r"\bvip\b|\bvvip\b|minister|cm\b|convoy|ಗಣ್ಯ|ಸಚಿವ"),
+    ("protest",           r"protest|dharna|strike|bandh|agitation|ಪ್ರತಿಭಟನೆ|ಧರಣಿ|ಮುಷ್ಕರ"),
+    ("procession",        r"procession|rally|march|festival|jatre|ಮೆರವಣಿಗೆ|ಜಾತ್ರೆ|ಹಬ್ಬ"),
+    ("utility_work",      r"bwssb|kride|bescom|bbmp|cement|drainage|chamber|pipe|"
+                          r"ಒಳಚರಂಡಿ|ಸಿಮೆಂಟ್|ಪೈಪ್|ಕೆಲಸ|ವರ್ಕ್|ಕಾಮಗಾರಿ"),
+    ("tree_fall",         r"tree\s*fall|tree\s*fell|fallen tree|ಮರ\s*ಬಿದ್ದ|ಮರ ಬಿದ"),
+    ("water_logging",     r"water\s*logg|woter|flood|drainage leak|ನೀರು|ಮಳೆ|ಜಲ"),
+    ("accident",          r"accident|collision|crash|hit|ಅಪಘಾತ|ಡಿಕ್ಕಿ"),
+    ("vehicle_breakdown", r"break\s*down|breakdown|broke|offload|off road|off\s* road|"
+                          r"mechanic|clutch|gear\s*box|punctur|panchar|ಪಂಚರ್|tyre|tyear|"
+                          r"tire|blost|blast|ಕೆಟ್ಟು|ಬ್ರೇಕ್\s*ಡೌನ್|ವೆಹಿಕಲ್"),
+    ("pothole",           r"pot\s*hole|pothole|gundi|ಗುಂಡಿ"),
+    ("congestion",        r"congest|traffic jam|slow mov|ನಿಧಾನ|ಜಾಮ್"),
+]
+_SEMANTIC_COMPILED = [(t, re.compile(p, re.IGNORECASE)) for t, p in SEMANTIC_PATTERNS]
+
+# Anonymisation placeholders to strip before matching
+_ANON_RE = re.compile(r"\[(LOCATION|PERSON|PHONE|EMAIL)\]", re.IGNORECASE)
+
+# Ordinal encoding for the semantic type (tree/numeric input for XGBoost)
+SEMANTIC_TYPE_ORDER = [
+    "other", "congestion", "pothole", "vehicle_breakdown", "water_logging",
+    "tree_fall", "accident", "utility_work", "procession", "protest",
+    "vip_movement", "sports_event",
+]
+_SEMANTIC_MAP: dict[str, int] = {t: i for i, t in enumerate(SEMANTIC_TYPE_ORDER)}
+
+
+def extract_semantic_type(text) -> str:
+    """Return the event semantic type inferred from a free-text description."""
+    if not isinstance(text, str) or not text.strip():
+        return "other"
+    cleaned = _ANON_RE.sub(" ", text)
+    for sem_type, pattern in _SEMANTIC_COMPILED:
+        if pattern.search(cleaned):
+            return sem_type
+    return "other"
+
 # Numeric risk weight per cause (used as XGBoost feature)
 CAUSE_SEVERITY_WEIGHT: dict[str, int] = {
     "accident": 3,
     "flood": 3,
+    "vip_movement": 3,     # rolling closures, high disruption
+    "protest": 3,          # unplanned gathering, unpredictable spread
     "water_logging": 2,
     "tree_fall": 2,
     "public_event": 2,
+    "procession": 2,       # planned gathering, partial closures
     "construction": 2,
     "pot_holes": 1,
     "vehicle_breakdown": 1,
+    "congestion": 1,
+    "road_conditions": 1,
     "other": 1,
 }
 
@@ -60,12 +114,17 @@ _PRIORITY_SCORE = {"High": 2, "Medium": 1, "Low": 0}
 _CAUSE_SEVERITY_SCORE: dict[str, int] = {
     "accident": 2,
     "flood": 2,
+    "vip_movement": 2,
+    "protest": 2,
     "water_logging": 1,
     "tree_fall": 1,
     "public_event": 1,
+    "procession": 1,
     "construction": 1,
     "vehicle_breakdown": 0,
     "pot_holes": 0,
+    "congestion": 0,
+    "road_conditions": 0,
     "other": 0,
 }
 
@@ -134,9 +193,26 @@ def temporal_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def junction_repeat_count(df: pd.DataFrame) -> pd.DataFrame:
-    """Global frequency of events per junction — signals chronic hotspot junctions."""
-    counts = df["junction"].value_counts()
-    df["junction_repeat_count"] = df["junction"].map(counts).fillna(1).astype(int)
+    """
+    Backward-looking count of prior events at the same junction.
+
+    Previously this used a global value_counts() over the entire dataset, which
+    leaks future information into the past (an event "knows" about events that
+    happened after it).  We instead count, for each event, how many events
+    occurred at the same junction *strictly before* it — a leakage-free chronic
+    hotspot signal computed exactly the same way as corridor_7d_score.
+    """
+    ordered = df.sort_values("start_datetime", kind="stable")
+    prior = ordered.groupby("junction").cumcount()   # 0,1,2,… prior events
+    counts = prior.reindex(df.index).astype(int)
+    # "unknown" is a catch-all bucket, not a real junction — a running count over
+    # it is just a time index, so force it to 0 (no known chronic-hotspot signal).
+    counts = counts.where(df["junction"].str.lower() != "unknown", 0)
+    df["junction_repeat_count"] = counts.astype(int)
+    logger.info(
+        "junction_repeat_count (backward-looking) computed (max=%d at a named junction)",
+        int(df["junction_repeat_count"].max()),
+    )
     return df
 
 
@@ -196,6 +272,21 @@ def encode_veh_type(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def encode_semantic_type(df: pd.DataFrame) -> pd.DataFrame:
+    """Derive event_semantic_type + its ordinal encoding from the description text."""
+    text = df["description"] if "description" in df.columns else pd.Series([""] * len(df))
+    df["event_semantic_type"] = text.map(extract_semantic_type)
+    df["event_semantic_encoded"] = (
+        df["event_semantic_type"].map(_SEMANTIC_MAP).fillna(0).astype(int)
+    )
+    coverage = (df["event_semantic_type"] != "other").mean() * 100
+    logger.info(
+        "event_semantic_type: %.0f%% of events matched a text pattern\n%s",
+        coverage, df["event_semantic_type"].value_counts().to_string(),
+    )
+    return df
+
+
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
@@ -214,6 +305,8 @@ _MODEL_COLS = [
     "cause_severity_weight",
     "road_closure_binary",
     "veh_type_encoded",
+    "event_semantic_type",
+    "event_semantic_encoded",
     "hour_of_day",
     "day_of_week",
     "month",
@@ -267,6 +360,7 @@ def run_feature_engineering(
     df = encode_cause_weight(df)
     df = encode_road_closure(df)
     df = encode_veh_type(df)
+    df = encode_semantic_type(df)
 
     out_dir = project_root / "data" / "processed"
     out_dir.mkdir(parents=True, exist_ok=True)

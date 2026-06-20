@@ -18,8 +18,10 @@ import streamlit as st
 
 from feature_engineering import (
     CAUSE_SEVERITY_WEIGHT,
+    _SEMANTIC_MAP,
     _VEH_TYPE_MAP,
     _VEH_TYPE_ORDER,
+    extract_semantic_type,
 )
 from model_training import FEATURES, SEVERITY_COLORS, SEVERITY_INVERSE_MAP
 from utils import ALL_CAUSES, ALL_ZONES, CAUSE_DISPLAY, get_nearest_station
@@ -115,6 +117,13 @@ with st.form("predict_form"):
         corridor = st.selectbox("Corridor", all_corridors)
         zone = st.selectbox("Zone", ALL_ZONES)
 
+    desc_text = st.text_area(
+        "Event description (optional — English or Kannada)",
+        placeholder="e.g. 'Cricket match at M Chinnaswamy Stadium' or 'BMTC bus broken down'",
+        help="Free text is mined for an event type (sports event, utility work, "
+             "VIP movement, …) that feeds the clearance-time estimate.",
+    )
+
     submitted = st.form_submit_button("Predict", use_container_width=True, type="primary")
 
 # ---------------------------------------------------------------------------
@@ -130,20 +139,26 @@ if submitted:
     is_peak   = int(hour in range(8, 11) or hour in range(17, 21))
     is_weekend = int(day_idx >= 5)
 
+    # Mine the free-text description for an event semantic type (bilingual).
+    # Falls back to "other" when no description is given.
+    semantic_type = extract_semantic_type(desc_text)
+    semantic_encoded = _SEMANTIC_MAP.get(semantic_type, 0)
+
     # Full feature dict — each model picks its own columns from the pkl's feature list.
-    # CLF features: contextual only (no cause/closure) to avoid label leakage.
-    # REG features: includes cause/closure (duration is an observed value, not circular).
+    # CLF features: contextual only (no cause/closure/text) to avoid label leakage.
+    # REG features: includes cause/closure/semantic (duration is observed, not circular).
     all_feat_vals = {
-        "cause_severity_weight": CAUSE_SEVERITY_WEIGHT.get(cause, 1),
-        "road_closure_binary":   int(road_closure),
-        "hour_of_day":           hour,
-        "day_of_week":           day_idx,
-        "month":                 month,
-        "is_peak_hour":          is_peak,
-        "is_weekend":            is_weekend,
-        "junction_repeat_count": junction_rpt,
-        "corridor_7d_score":     corridor_7d,
-        "veh_type_encoded":      _VEH_TYPE_MAP.get(veh_type, len(_VEH_TYPE_ORDER) - 1),
+        "cause_severity_weight":  CAUSE_SEVERITY_WEIGHT.get(cause, 1),
+        "road_closure_binary":    int(road_closure),
+        "event_semantic_encoded": semantic_encoded,
+        "hour_of_day":            hour,
+        "day_of_week":            day_idx,
+        "month":                  month,
+        "is_peak_hour":           is_peak,
+        "is_weekend":             is_weekend,
+        "junction_repeat_count":  junction_rpt,
+        "corridor_7d_score":      corridor_7d,
+        "veh_type_encoded":       _VEH_TYPE_MAP.get(veh_type, len(_VEH_TYPE_ORDER) - 1),
     }
     X_clf = pd.DataFrame([all_feat_vals])[clf_pkg["features"]]
     X_dur = pd.DataFrame([all_feat_vals])[dur_pkg["features"]]
@@ -194,7 +209,18 @@ if submitted:
     )
     r2.metric("Estimated Clearance", f"{duration_pred:.0f} min",
               delta=f"{duration_pred/60:.1f} hrs")
-    r3.metric("Model Confidence", f"{confidence*100:.1f}%")
+    r3.metric("Model Score", f"{confidence*100:.1f}%",
+              help="Raw XGBoost class probability (uncalibrated) — a relative "
+                   "confidence indicator, not a true probability.")
+
+    if desc_text and desc_text.strip():
+        if semantic_type != "other":
+            st.caption(
+                f"🔎 Detected event type from description: "
+                f"**{semantic_type.replace('_', ' ').title()}**"
+            )
+        else:
+            st.caption("🔎 No specific event type matched in the description.")
 
     # Probability bar
     st.divider()

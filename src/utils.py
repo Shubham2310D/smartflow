@@ -86,10 +86,19 @@ CAUSE_DISPLAY: dict[str, str] = {
     "water_logging":     "Water Logging",
     "pot_holes":         "Pot Holes",
     "public_event":      "Public Event",
+    "procession":        "Procession",
+    "vip_movement":      "VIP Movement",
+    "protest":           "Protest",
     "construction":      "Construction",
+    "congestion":        "Congestion",
+    "road_conditions":   "Road Conditions",
     "flood":             "Flood",
     "other":             "Other",
 }
+
+# Event-driven / gathering causes (the planned & unplanned event categories
+# the problem statement is centred on).  Used for filtering and analytics.
+EVENT_DRIVEN_CAUSES = ["procession", "vip_movement", "protest", "public_event"]
 
 ALL_CAUSES = list(CAUSE_DISPLAY.keys())
 ALL_ZONES  = sorted(ZONE_STATIONS.keys())

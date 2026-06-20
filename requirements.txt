@@ -17,13 +17,14 @@ streamlit-folium>=0.20.0
 plotly>=5.22.0
 folium>=0.16.0
 
+# Explainability (SHAP waterfall on the Predict page)
+shap>=0.45.0
+matplotlib>=3.8.0
+
 # Config
 pyyaml>=6.0
 
 # Optional — Moran's I spatial autocorrelation (install separately if needed):
 #   pip install esda libpysal
-
-# Optional — SHAP explainability (install separately if available for Python 3.13):
-#   pip install shap
 
 # NOT required — removed geopandas/geopy (code uses scipy for geometry)

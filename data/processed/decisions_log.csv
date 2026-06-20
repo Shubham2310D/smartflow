@@ -1,0 +1,6 @@
+logged_at,event_cause,zone,hour_of_day,predicted_severity,predicted_clearance_min,recommended_personnel,actual_clearance_min,actual_severity,followed
+2026-06-20 08:16:06,accident,Central Zone 2,18,High,72,7,85,High,yes
+2026-06-20 08:16:06,vehicle_breakdown,West Zone 2,9,Medium,44,4,38,Medium,yes
+2026-06-20 08:16:06,procession,Central Zone 1,11,Medium,90,4,120,High,no
+2026-06-20 08:16:06,water_logging,South Zone 1,20,High,98,6,110,High,yes
+2026-06-20 08:16:06,pot_holes,East Zone 2,14,Low,30,2,25,Low,yes

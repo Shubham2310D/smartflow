@@ -7,9 +7,11 @@ Factor               Low   Medium   High
 Base personnel         2      3       5
 +peak hour            +0     +1      +1
 +road_closure         +1     +1      +1
-+high-risk cause      +1     +1      +1   (accident, flood, water_logging)
++high-risk cause      +1     +1      +1   (accident, flood, water_logging,
+                                            protest, vip_movement, procession)
 
-Barricade required   if road_closure OR cause in {accident, tree_fall, flood, water_logging}
+Barricade required   if road_closure OR cause in {accident, tree_fall, flood,
+                     water_logging, protest, vip_movement, procession, public_event}
 Diversion recommended if severity == High
 Priority flag        URGENT  if High, PRIORITY if Medium, ROUTINE if Low
 """
@@ -24,9 +26,18 @@ from utils import get_nearest_station
 
 _BASE_PERSONNEL = {"Low": 2, "Medium": 3, "High": 5}
 
-_HIGH_RISK_CAUSES = {"accident", "flood", "water_logging"}
+# Causes that warrant extra personnel.  Crowd/gathering events (protest,
+# vip_movement, procession) need more officers for crowd control, not just
+# clearance.
+_HIGH_RISK_CAUSES = {
+    "accident", "flood", "water_logging",
+    "protest", "vip_movement", "procession",
+}
 
-_BARRICADE_CAUSES = {"accident", "tree_fall", "flood", "water_logging"}
+_BARRICADE_CAUSES = {
+    "accident", "tree_fall", "flood", "water_logging",
+    "protest", "vip_movement", "procession", "public_event",
+}
 
 _PRIORITY_FLAGS = {"High": "URGENT", "Medium": "PRIORITY", "Low": "ROUTINE"}
 
@@ -40,6 +51,11 @@ _CAUSE_BASE_CLEARANCE: dict[str, int] = {
     "tree_fall":       45,
     "construction":    60,
     "public_event":    120,
+    "procession":      90,
+    "vip_movement":    60,
+    "protest":         100,
+    "congestion":      45,
+    "road_conditions": 40,
     "pot_holes":       30,
     "vehicle_breakdown": 40,
     "other":           35,

@@ -231,4 +231,37 @@ fig6.update_layout(
 )
 st.plotly_chart(fig6, use_container_width=True)
 
+# ---------------------------------------------------------------------------
+# Chart 7: Event type mined from free-text descriptions (NLP)
+# ---------------------------------------------------------------------------
+
+if "event_semantic_type" in fdf.columns:
+    st.subheader("Event Type Mined from Free-Text Descriptions")
+    st.caption(
+        "Derived by a bilingual (English + Kannada) keyword pass over the "
+        "`description` field — recovers event semantics the structured cause "
+        "column misses (sports events, utility work, VIP movement, processions)."
+    )
+    sem = fdf[fdf["event_semantic_type"] != "other"]["event_semantic_type"]
+    if len(sem) > 0:
+        sem_counts = sem.value_counts().reset_index()
+        sem_counts.columns = ["Event Type", "Events"]
+        sem_counts["Event Type"] = sem_counts["Event Type"].str.replace("_", " ").str.title()
+        fig7 = px.bar(
+            sem_counts, x="Event Type", y="Events",
+            color="Events", color_continuous_scale="Teal", text_auto=True,
+        )
+        fig7.update_layout(
+            coloraxis_showscale=False, height=350,
+            margin=dict(t=10, b=10), xaxis_tickangle=-30,
+        )
+        st.plotly_chart(fig7, use_container_width=True)
+        matched_pct = 100 * len(sem) / len(fdf)
+        st.caption(
+            f"{len(sem):,} of {len(fdf):,} events ({matched_pct:.0f}%) matched a "
+            "text pattern. The rest are too short or generic to classify."
+        )
+    else:
+        st.info("No event types matched in the current filter selection.")
+
 st.caption(f"Based on {len(fdf):,} events matching current filters.")

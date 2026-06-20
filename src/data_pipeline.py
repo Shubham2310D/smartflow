@@ -40,6 +40,12 @@ _DATETIME_COLS = [
 ]
 
 # Canonical event cause vocabulary (source token → canonical label)
+#
+# The event-driven causes the problem statement cares about — procession,
+# vip_movement, protest, public_event — are kept as first-class labels rather
+# than collapsed into "other".  congestion and road_conditions are also
+# surfaced because they carry real operational signal.  Only genuinely
+# residual tokens (debris, test_demo, fog) fall through to "other".
 _CAUSE_MAP: dict[str, str] = {
     "vehicle_breakdown": "vehicle_breakdown",
     "accident": "accident",
@@ -49,6 +55,14 @@ _CAUSE_MAP: dict[str, str] = {
     "public_event": "public_event",
     "construction": "construction",
     "flood": "flood",
+    # event-driven / gathering causes (were silently dropped into "other")
+    "procession": "procession",
+    "vip_movement": "vip_movement",
+    "protest": "protest",
+    # condition causes worth keeping distinct
+    "congestion": "congestion",
+    "road_conditions": "road_conditions",
+    # residual
     "others": "other",
     "other": "other",
 }

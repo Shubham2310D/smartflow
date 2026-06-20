@@ -28,17 +28,18 @@ st.set_page_config(
 # ---------------------------------------------------------------------------
 
 st.title("SmartFlow — Event-Driven Traffic Intelligence")
-st.caption("Bengaluru Traffic Management · Flipkart Hackathon 2024")
+st.caption("Bengaluru Traffic Management · Flipkart Hackathon Round 2")
 
 st.markdown(
     """
-    **SmartFlow** ingests historical Bengaluru traffic event data and provides three capabilities:
+    **SmartFlow** ingests historical Bengaluru traffic event data and provides four capabilities:
 
     | Capability | What it does |
     |---|---|
     | **Predict** | Classify event severity (High/Medium/Low) and forecast clearance time |
     | **Detect** | Surface chronic hotspot junctions using spatial clustering |
     | **Recommend** | Tell traffic officers how many personnel to deploy and from where |
+    | **Learn** | Log decisions and track predicted-vs-actual to retrain over time |
 
     Use the sidebar to navigate between modules.
     """
@@ -114,6 +115,6 @@ else:
 
 st.divider()
 st.caption(
-    "Data source: Astram Traffic Events Dataset, Bengaluru (8,173 incidents) · "
-    "Models: XGBoost · Clustering: DBSCAN + Moran's I"
+    "Data source: Astram Traffic Events Dataset, Bengaluru (8,057 incidents after cleaning) · "
+    "Models: XGBoost · Clustering: DBSCAN (haversine)"
 )
