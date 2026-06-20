@@ -134,6 +134,8 @@ smartflow/
 │   ├── raw/                   # Place events.csv here
 │   └── processed/             # Auto-generated outputs
 ├── models/                    # Trained .pkl files
+├── .github/workflows/ci.yml   # CI: pytest + Docker build on push/PR
+├── Dockerfile                 # Dashboard container (out-of-the-box demo)
 ├── config.yaml               # Single source of truth (wired into code)
 └── requirements.txt
 ```
@@ -183,6 +185,23 @@ streamlit run dashboard/app.py
 Open [http://localhost:8501](http://localhost:8501) in your browser.
 
 > **Quick start (all steps in one):** The dashboard auto-runs the pipeline on first load if processed files are missing. Just run `streamlit run dashboard/app.py` after placing `events.csv` in `data/raw/`.
+
+### Run with Docker
+
+The processed data and trained models are committed, so the dashboard runs out of the box — no raw CSV or training step needed:
+
+```bash
+docker build -t smartflow .
+docker run -p 8501:8501 smartflow      # → http://localhost:8501
+```
+
+### Tests & CI
+
+```bash
+pytest tests/        # 15 tests: leakage, history lookup, optimizer, planner, learning loop
+```
+
+[GitHub Actions](.github/workflows/ci.yml) runs the test suite **and** a Docker image build on every push / PR.
 
 ---
 

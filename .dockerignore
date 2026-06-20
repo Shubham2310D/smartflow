@@ -1,0 +1,15 @@
+# Keep the image lean — exclude things the running app doesn't need.
+.git
+.github
+__pycache__
+**/__pycache__
+*.pyc
+.pytest_cache
+tests
+notebooks
+snapshots
+take_screenshots.py
+*.md
+.venv
+venv
+env
