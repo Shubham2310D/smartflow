@@ -233,9 +233,14 @@ def corridor_7d_score(df: pd.DataFrame) -> pd.DataFrame:
     """
     df = df.sort_values("start_datetime").reset_index(drop=True)
 
-    # start_datetime is naive local (normalised at ingestion); convert to int64
-    # nanoseconds for arithmetic. Deltas are tz-invariant either way.
-    ts_ns: np.ndarray = df["start_datetime"].astype("int64").values
+    # Convert to int64 nanoseconds for arithmetic. Force ns resolution first:
+    # pandas to_datetime can yield datetime64[s]/[us] depending on version, and a
+    # bare .astype("int64") would then be in the wrong unit, silently breaking the
+    # 7-day window (deltas are tz-invariant either way).
+    ts = df["start_datetime"]
+    if isinstance(ts.dtype, pd.DatetimeTZDtype):
+        ts = ts.dt.tz_localize(None)
+    ts_ns: np.ndarray = ts.to_numpy("datetime64[ns]").astype("int64")
 
     seven_days_ns = int(7 * 24 * 3600 * 1e9)
     scores = np.zeros(len(df), dtype=np.int32)
