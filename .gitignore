@@ -17,6 +17,11 @@ VIDEO_SCRIPT.md
 # Screenshots committed for README preview
 # snapshots/
 
+# ── Real-time event store + log lock/temp files (runtime state) ──────────────
+data/processed/events.db
+*.lock
+*.csv.tmp
+
 # ── Python cache ─────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]

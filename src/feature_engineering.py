@@ -279,6 +279,67 @@ def encode_veh_type(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def cluster_features(df: pd.DataFrame, project_root: Path | None = None) -> pd.DataFrame:
+    """
+    Spatial DBSCAN cluster signals, computed LEAKAGE-FREE — the hotspot output
+    fed back as model features (it was previously computed but never used by the
+    models). Two columns, both strictly backward-looking, exactly the discipline
+    of corridor_7d_score / junction_repeat_count:
+
+      cluster_prior_events  — count of prior events in the same spatial cluster
+      cluster_closure_rate  — road-closure rate among those prior events (a
+                              learned spatial base-rate the closure model leans on)
+
+    DBSCAN membership is purely spatial (lat/lon), so assigning a cluster uses no
+    future info; only the per-cluster statistics are time-gated. Noise points
+    (DBSCAN label -1) get the global backward closure rate and 0 prior events, so
+    "no cluster" can't act as a disguised signal. Requires road_closure_binary,
+    so it runs after encode_road_closure.
+    """
+    from hotspot_engine import _hotspot_cfg, _EARTH_RADIUS_KM, run_dbscan  # noqa: PLC0415
+
+    df = df.copy()
+    cfg = _hotspot_cfg(project_root or Path(__file__).resolve().parents[1])
+    eps_rad = cfg["dbscan_eps_km"] / _EARTH_RADIUS_KM
+
+    coords_ok = df.dropna(subset=["latitude", "longitude"])
+    labels = pd.Series(-1, index=df.index, dtype=int)
+    if len(coords_ok) >= cfg["dbscan_min_samples"]:
+        labeled = run_dbscan(coords_ok, eps_rad=eps_rad, min_samples=cfg["dbscan_min_samples"])
+        labels.loc[coords_ok.index] = labeled["cluster_label"].astype(int).values
+    df["cluster_label"] = labels
+
+    # Backward-looking statistics, in chronological order.
+    order = df.sort_values("start_datetime", kind="stable")
+    closure = order.get("road_closure_binary", pd.Series(0, index=order.index)).fillna(0).astype(int)
+
+    # Global backward closure rate — the prior for first-in-cluster and noise rows.
+    g_cnt = np.arange(len(order))
+    g_rate = np.where(g_cnt > 0, (closure.cumsum() - closure) / np.maximum(g_cnt, 1), 0.0)
+
+    cl = order["cluster_label"]
+    grp = closure.groupby(cl)
+    c_prior_cnt = grp.cumcount().values
+    c_prior_sum = (grp.cumsum() - closure).values
+    rate = np.where(c_prior_cnt > 0, c_prior_sum / np.maximum(c_prior_cnt, 1), g_rate)
+
+    is_noise = (cl == -1).values
+    rate = np.where(is_noise, g_rate, rate)
+    prior_events = np.where(is_noise, 0, c_prior_cnt).astype(int)
+
+    order["cluster_closure_rate"] = rate
+    order["cluster_prior_events"] = prior_events
+    df["cluster_closure_rate"] = order["cluster_closure_rate"].reindex(df.index).astype(float)
+    df["cluster_prior_events"] = order["cluster_prior_events"].reindex(df.index).astype(int)
+
+    n_clusters = int(df.loc[df["cluster_label"] >= 0, "cluster_label"].nunique())
+    logger.info(
+        "cluster_features: %d clusters; mean cluster_closure_rate=%.3f",
+        n_clusters, float(df["cluster_closure_rate"].mean()),
+    )
+    return df
+
+
 def encode_semantic_type(df: pd.DataFrame) -> pd.DataFrame:
     """Derive event_semantic_type + its ordinal encoding from the description text."""
     text = df["description"] if "description" in df.columns else pd.Series([""] * len(df))
@@ -321,6 +382,9 @@ _MODEL_COLS = [
     "is_weekend",
     "junction_repeat_count",
     "corridor_7d_score",
+    "cluster_label",
+    "cluster_prior_events",
+    "cluster_closure_rate",
     # targets
     "severity_class",
     "duration_minutes",
@@ -368,6 +432,9 @@ def run_feature_engineering(
     df = encode_road_closure(df)
     df = encode_veh_type(df)
     df = encode_semantic_type(df)
+
+    logger.info("Computing spatial cluster features…")
+    df = cluster_features(df, project_root)
 
     out_dir = project_root / "data" / "processed"
     out_dir.mkdir(parents=True, exist_ok=True)

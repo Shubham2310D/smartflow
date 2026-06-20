@@ -61,7 +61,12 @@ resource_rules:
     - procession
     - public_event
   diversion_min_severity: High
-  closure_prob_barricade_threshold: 0.30   # model P(closure) ≥ this → barricade
+  # model P(closure) ≥ this → barricade. DERIVED, not asserted: the cost-optimal
+  # threshold on the holdout (a missed real closure weighted 5× a wasted barricade)
+  # is 0.15 — see the precision/recall/cost curve on the Feedback Loop page and in
+  # the closure model payload. The model's own stamped threshold overrides this
+  # where the model is loaded (API, Predict→Resource Plan); this is the fallback.
+  closure_prob_barricade_threshold: 0.15
 
 # Officer roster for the multi-event allocation optimiser.
 # ASSUMPTION: the dataset contains no staffing table or station capacity, so

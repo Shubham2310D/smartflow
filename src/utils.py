@@ -67,6 +67,20 @@ def is_peak_hour(hour: int) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Severity display — colour-blind-safe cues.
+# Colour alone (red/amber/green) is invisible to ~8% of men, so every severity
+# display pairs the colour with a distinct GEOMETRIC SHAPE and the text label.
+# ---------------------------------------------------------------------------
+
+SEVERITY_SHAPE = {"High": "▲", "Medium": "●", "Low": "■"}
+
+
+def severity_badge(sev: str) -> str:
+    """'High' -> '▲ High' — a shape + text cue that needs no colour to read."""
+    return f"{SEVERITY_SHAPE.get(sev, '◆')} {sev}"
+
+
+# ---------------------------------------------------------------------------
 # Zone → police station mapping
 # (covers all zone values seen in the Astram dataset)
 # ---------------------------------------------------------------------------

@@ -28,6 +28,21 @@ st.set_page_config(page_title="Feedback Loop | SmartFlow", page_icon="🔁", lay
 
 _BACKTEST = _ROOT / "data" / "processed" / "duration_backtest.csv"
 _DUR_PKL  = _ROOT / "models" / "duration_predictor.pkl"
+_CLO_PKL  = _ROOT / "models" / "closure_predictor.pkl"
+
+
+@st.cache_resource(show_spinner=False)
+def _load_closure_meta():
+    if not _CLO_PKL.exists():
+        return {}
+    pkg = joblib.load(_CLO_PKL)
+    return {
+        "roc_auc": pkg.get("roc_auc"),
+        "walk_forward": pkg.get("walk_forward", {}),
+        "barricade_threshold": pkg.get("barricade_threshold"),
+        "barricade_fn_fp_ratio": pkg.get("barricade_fn_fp_ratio"),
+        "barricade_threshold_curve": pkg.get("barricade_threshold_curve", []),
+    }
 
 
 @st.cache_resource(show_spinner=False)
@@ -47,6 +62,54 @@ st.markdown(
     held-out historical sample and on live decisions logged by operators.
     """
 )
+
+# --- Closure model: walk-forward stability (variance band, not one point) ---
+_clo_meta = _load_closure_meta()
+_wf = _clo_meta.get("walk_forward", {})
+if _wf.get("n_folds"):
+    w1, w2, w3 = st.columns(3)
+    w1.metric("Closure ROC-AUC (single split)", f"{_clo_meta['roc_auc']:.3f}")
+    w2.metric("Walk-forward ROC-AUC",
+              f"{_wf['roc_auc_mean']:.3f} ± {_wf['roc_auc_std']:.3f}",
+              help=f"Mean ± std across {_wf['n_folds']} expanding-window folds: "
+                   f"{_wf['roc_auc_folds']}")
+    w3.metric("Walk-forward PR-AUC", f"{_wf.get('pr_auc_mean', float('nan')):.3f}")
+    st.caption(
+        "The single 80/20 split is one noisy estimate. The walk-forward band is "
+        "the honest read: the single-split figure sits at the optimistic end of "
+        "fold-to-fold variation."
+    )
+
+    # --- Barricade threshold: derived from a cost tradeoff, not asserted ---
+    curve = _clo_meta.get("barricade_threshold_curve") or []
+    if curve:
+        cdf = pd.DataFrame(curve)
+        chosen = _clo_meta.get("barricade_threshold")
+        ratio = _clo_meta.get("barricade_fn_fp_ratio", 5)
+        st.markdown(f"**Barricade threshold — chosen by cost, not assertion: {chosen:.2f}**")
+        cfig = go.Figure()
+        cfig.add_trace(go.Scatter(x=cdf["threshold"], y=cdf["precision"],
+                                  mode="lines+markers", name="precision", yaxis="y"))
+        cfig.add_trace(go.Scatter(x=cdf["threshold"], y=cdf["recall"],
+                                  mode="lines+markers", name="recall", yaxis="y"))
+        cfig.add_trace(go.Scatter(x=cdf["threshold"], y=cdf["cost"],
+                                  mode="lines+markers", name=f"cost (FN={ratio}×FP)", yaxis="y2"))
+        cfig.add_vline(x=chosen, line_dash="dash", line_color="#dc3545")
+        cfig.update_layout(
+            height=320, margin=dict(t=10, b=10),
+            xaxis_title="P(closure) threshold",
+            yaxis=dict(title="precision / recall", rangemode="tozero"),
+            yaxis2=dict(title="cost", overlaying="y", side="right", rangemode="tozero"),
+            legend=dict(orientation="h", y=1.15),
+        )
+        st.plotly_chart(cfig, use_container_width=True)
+        st.caption(
+            f"A missed real closure (no barricade when a road shuts) is weighted "
+            f"{ratio}× a wasted barricade. The dashed line is the cost-minimising "
+            f"threshold ({chosen:.2f}) — lower than a naive 0.30 because catching "
+            "real closures matters more than avoiding a few false barricades."
+        )
+    st.divider()
 
 # ---------------------------------------------------------------------------
 # Helper: predicted-vs-actual scatter with y=x reference
@@ -114,6 +177,12 @@ if _BACKTEST.exists():
         "forecast, and the Resource Plan falls back to cause-based medians. The "
         "**severity** model, by contrast, beats its baseline by a real ~12 points. "
         "This panel exists so that distinction is visible, not buried."
+    )
+    st.caption(
+        "⚠️ **Selection bias:** only ~43% (3,061 / 7,058) of closed tickets carry a "
+        "usable close-time; the missing 57% aren't random (clean fast tickets get "
+        "closed properly, messy long ones are abandoned open), so this holdout "
+        "skews toward shorter events and the MAE is optimistic."
     )
 else:
     st.info(

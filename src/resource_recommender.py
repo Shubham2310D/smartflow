@@ -100,6 +100,7 @@ def recommend(
     zone: str,
     duration_minutes: float | None = None,
     closure_probability: float | None = None,
+    barricade_threshold: float | None = None,
 ) -> dict:
     """
     Produce a deployment recommendation for a single event.
@@ -131,8 +132,11 @@ def recommend(
     closure = bool(requires_road_closure)
     is_peak = is_peak_hour(hour_of_day)
     closure_prob = float(closure_probability) if closure_probability is not None else None
-    closure_likely = closure_prob is not None and \
-        closure_prob >= rules["closure_prob_barricade_threshold"]
+    # Prefer the model's cost-derived threshold (stamped in the closure pkl and
+    # passed in); fall back to the config value if none supplied.
+    thresh = barricade_threshold if barricade_threshold is not None \
+        else rules["closure_prob_barricade_threshold"]
+    closure_likely = closure_prob is not None and closure_prob >= thresh
 
     # ---------- Personnel ----------
     personnel = base_personnel[sev]

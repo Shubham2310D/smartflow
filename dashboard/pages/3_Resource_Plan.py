@@ -117,6 +117,7 @@ rec = recommend(
     zone                  = zone_sel,
     duration_minutes      = duration_for_rec,
     closure_probability   = closure_prob,
+    barricade_threshold   = prev.get("barricade_threshold") if prev else None,
 )
 
 # ---------------------------------------------------------------------------

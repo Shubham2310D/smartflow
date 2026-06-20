@@ -22,11 +22,21 @@ import pandas as pd
 
 from utils import get_project_root
 
-# Features this module supplies. Both are backward-looking counts that an
-# incoming event cannot know about itself at inference time.
-_HISTORY_FEATURES = ["corridor_7d_score", "junction_repeat_count"]
+# Features this module supplies — all backward-looking signals an incoming event
+# cannot know about itself at inference time. Count-like features are rounded to
+# int; rate-like features (0–1) are kept as floats.
+_HISTORY_FEATURES = [
+    "corridor_7d_score", "junction_repeat_count",
+    "cluster_prior_events", "cluster_closure_rate",
+]
+_RATE_FEATURES = {"cluster_closure_rate"}   # keep as float, don't round to 0/1
 
 _cache: dict | None = None
+
+
+def _agg(series, feature):
+    med = float(series.median())
+    return round(med, 4) if feature in _RATE_FEATURES else int(round(med))
 
 
 def _features_path():
@@ -47,11 +57,12 @@ def _load() -> dict:
 
     wanted = set(_HISTORY_FEATURES) | {"corridor"}
     df = pd.read_csv(path, usecols=lambda c: c in wanted)
+    avail = [f for f in _HISTORY_FEATURES if f in df.columns]
     per_corridor = {
-        corridor: {f: int(round(float(grp[f].median()))) for f in _HISTORY_FEATURES}
+        corridor: {f: _agg(grp[f], f) for f in avail}
         for corridor, grp in df.groupby("corridor")
     }
-    global_med = {f: int(round(float(df[f].median()))) for f in _HISTORY_FEATURES}
+    global_med = {f: _agg(df[f], f) for f in avail}
     _cache = {"per_corridor": per_corridor, "global": global_med}
     return _cache
 

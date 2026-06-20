@@ -30,13 +30,11 @@ from roster_optimizer import (
     roster_capacities,
     station_locations,
 )
-from utils import CAUSE_DISPLAY
+from utils import CAUSE_DISPLAY, severity_badge
 
 st.set_page_config(page_title="Roster Optimizer | SmartFlow", page_icon="🚓", layout="wide")
 
 _FEATS = _ROOT / "data" / "processed" / "features.csv"
-
-_SEV_ICON = {"High": "🔴 High", "Medium": "🟠 Medium", "Low": "🟢 Low"}
 
 
 @st.cache_data(show_spinner=False)
@@ -178,7 +176,7 @@ for e in events:
     alloc = result["allocations"][e["id"]]
     table.append({
         "Event": e["id"],
-        "Severity": _SEV_ICON.get(e["severity"], e["severity"]),
+        "Severity": severity_badge(e["severity"]),
         "Cause": CAUSE_DISPLAY.get(e["cause"], e["cause"]),
         "Zone": e["zone"],
         "Demand": e["demand"],

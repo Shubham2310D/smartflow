@@ -202,9 +202,11 @@ if show_markers and len(fdf) > 0:
     sample = fdf.sample(min(500, len(fdf)), random_state=42)
     for _, row in sample.iterrows():
         sev  = row.get("severity_class", "Low")
+        # Size encodes severity too, so it reads without relying on colour alone.
+        sev_radius = {"High": 8, "Medium": 6, "Low": 4}.get(sev, 5)
         folium.CircleMarker(
             location=[row["latitude"], row["longitude"]],
-            radius=5,
+            radius=sev_radius,
             color=_dot_color(sev),
             fill=True,
             fill_opacity=0.8,

@@ -13,6 +13,9 @@ trivial to inspect, back up, or feed back into model_training.py.
 
 from __future__ import annotations
 
+import os
+import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -52,9 +55,46 @@ def load_decisions(project_root: Path | None = None) -> pd.DataFrame:
     return df[FIELDS]
 
 
+@contextmanager
+def _file_lock(path: Path, timeout: float = 5.0, stale: float = 30.0):
+    """
+    Portable advisory lock via an exclusive sidecar `.lock` file.
+
+    The Streamlit app and the API both append to decisions_log.csv; without a
+    lock a concurrent read-modify-write would corrupt or drop rows. This
+    serialises writers (works on Windows and Linux, no extra dependency) and
+    breaks a stale lock left by a crashed writer.
+    """
+    lock = path.with_suffix(path.suffix + ".lock")
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.close(fd)
+            break
+        except FileExistsError:
+            # Break a stale lock from a crashed writer.
+            try:
+                if time.time() - os.path.getmtime(lock) > stale:
+                    os.unlink(lock)
+                    continue
+            except OSError:
+                pass
+            if time.monotonic() > deadline:
+                break  # give up waiting rather than block the UI; write anyway
+            time.sleep(0.05)
+    try:
+        yield
+    finally:
+        try:
+            os.unlink(lock)
+        except OSError:
+            pass
+
+
 def log_decision(record: dict, project_root: Path | None = None) -> None:
     """
-    Append one decision to the log.
+    Append one decision to the log (lock-serialised, atomic write).
 
     `record` may contain any subset of FIELDS; missing keys are stored blank.
     `logged_at` is stamped automatically if not supplied.
@@ -66,9 +106,13 @@ def log_decision(record: dict, project_root: Path | None = None) -> None:
     if not row.get("logged_at"):
         row["logged_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
-    df_existing = pd.read_csv(path) if path.exists() else pd.DataFrame(columns=FIELDS)
-    df_new = pd.concat([df_existing, pd.DataFrame([row])], ignore_index=True)
-    df_new[FIELDS].to_csv(path, index=False)
+    with _file_lock(path):
+        df_existing = pd.read_csv(path) if path.exists() else pd.DataFrame(columns=FIELDS)
+        df_new = pd.concat([df_existing, pd.DataFrame([row])], ignore_index=True)
+        # Atomic replace so a reader never sees a half-written file.
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        df_new[FIELDS].to_csv(tmp, index=False)
+        os.replace(tmp, path)
 
 
 def summary(project_root: Path | None = None) -> dict:

@@ -22,7 +22,7 @@ import streamlit as st
 from event_analog import PLANNED_OBSTRUCTIONS, PLANNABLE_EVENTS
 from event_planner import plan_event
 from outcomes_log import log_decision
-from utils import ALL_ZONES, CAUSE_DISPLAY
+from utils import ALL_ZONES, CAUSE_DISPLAY, severity_badge
 
 st.set_page_config(page_title="Event Planner | SmartFlow", page_icon="📅", layout="wide")
 
@@ -99,7 +99,7 @@ st.markdown(
 st.subheader("Forecast impact (from similar past events)")
 f1, f2, f3, f4 = st.columns(4)
 with f1:
-    _card("Expected severity", plan["expected_severity"],
+    _card("Expected severity", severity_badge(plan["expected_severity"]),
           color=_SEV_COLOR.get(plan["expected_severity"], "#6c757d"))
 with f2:
     cl = plan["closure_likelihood"]

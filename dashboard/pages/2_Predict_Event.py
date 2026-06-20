@@ -24,9 +24,10 @@ from feature_engineering import (
     extract_semantic_type,
 )
 from history_features import corridor_list, history_features
+from impact_score import impact_score
 from model_training import FEATURES, SEVERITY_COLORS, SEVERITY_INVERSE_MAP, check_lib_versions
 from resource_recommender import clearance_range
-from utils import ALL_CAUSES, ALL_ZONES, CAUSE_DISPLAY, get_nearest_station, is_peak_hour
+from utils import ALL_CAUSES, ALL_ZONES, CAUSE_DISPLAY, get_nearest_station, is_peak_hour, severity_badge
 
 st.set_page_config(page_title="Predict Event | SmartFlow", page_icon="🔮", layout="wide")
 
@@ -162,6 +163,8 @@ if submitted:
         "is_weekend":             is_weekend,
         "junction_repeat_count":  junction_rpt,
         "corridor_7d_score":      corridor_7d,
+        "cluster_prior_events":   hist["cluster_prior_events"],
+        "cluster_closure_rate":   hist["cluster_closure_rate"],
         "veh_type_encoded":       _VEH_TYPE_MAP.get(veh_type, len(_VEH_TYPE_ORDER) - 1),
     }
     X_clf = pd.DataFrame([all_feat_vals])[clf_pkg["features"]]
@@ -193,6 +196,7 @@ if submitted:
         "hour_of_day":         hour,
         "zone":                zone,
         "corridor":            corridor,
+        "barricade_threshold": (clo_pkg.get("barricade_threshold") if clo_pkg else None),
         "X_input":             X_clf.to_dict("records")[0],
     }
 
@@ -209,7 +213,7 @@ if submitted:
     r1.markdown(
         f"<div style='background:{sev_color};padding:20px;border-radius:10px;text-align:center;"
         f"color:white;font-size:1.1em;font-weight:bold;'>"
-        f"Severity (triage): {severity}</div>",
+        f"Severity (triage): {severity_badge(severity)}</div>",
         unsafe_allow_html=True,
     )
     if closure_prob is not None:
@@ -229,6 +233,30 @@ if submitted:
               help=f"Median time-to-close for {cause} across {cr.get('n','?')} past "
                    "events (administrative close-time). NOT a model forecast — the "
                    "regressor does not beat this median (see Feedback Loop).")
+
+    # --- Heuristic disruption-impact score (transparent composite) ---
+    imp = impact_score(
+        road_closure=bool(road_closure),
+        corridor_7d=corridor_7d,
+        is_peak=bool(is_peak),
+        closure_prob=closure_prob,
+        cluster_closure_rate=all_feat_vals.get("cluster_closure_rate"),
+    )
+    _IMP_COLOR = {"Low": "#28a745", "Moderate": "#ffc107", "High": "#fd7e14", "Severe": "#dc3545"}
+    bd = imp["breakdown"]
+    st.markdown(
+        f"<div style='background:{_IMP_COLOR.get(imp['label'], '#6c757d')};padding:14px 20px;"
+        f"border-radius:10px;color:white;margin-top:10px;'>"
+        f"<b>Estimated disruption impact (heuristic): {imp['score']}/100 · {imp['label']}</b></div>",
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        f"⚠️ **Heuristic, not a learned forecast** — a transparent weighted composite of "
+        f"closure {bd['closure']} (×{imp['weights']['closure']}), corridor pressure "
+        f"{bd['corridor_pressure']} (×{imp['weights']['corridor']}), high-incident window "
+        f"{bd['high_incident_window']} (×{imp['weights']['window']}). The data has no measured "
+        "congestion outcome; an OSM road-class / speed feed (roadmap) would make this a real measure."
+    )
 
     if desc_text and desc_text.strip():
         if semantic_type != "other":

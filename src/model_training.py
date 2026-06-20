@@ -26,7 +26,12 @@ from sklearn.metrics import (
     r2_score,
     roc_auc_score,
 )
-from sklearn.model_selection import StratifiedKFold, train_test_split, cross_val_score
+from sklearn.model_selection import (
+    StratifiedKFold,
+    TimeSeriesSplit,
+    cross_val_score,
+    train_test_split,
+)
 from sklearn.utils.class_weight import compute_sample_weight
 from xgboost import XGBClassifier, XGBRegressor
 
@@ -90,6 +95,10 @@ CLF_FEATURES = [
     "is_weekend",
     "junction_repeat_count",
     "corridor_7d_score",
+    # cluster_prior_events is a leakage-free spatial chronic-hotspot signal.
+    # cluster_closure_rate is deliberately EXCLUDED here: severity_class is partly
+    # derived from closure, so a closure base-rate would re-introduce circularity.
+    "cluster_prior_events",
     "veh_type_encoded",
 ]
 
@@ -111,6 +120,8 @@ REG_FEATURES = [
     "is_weekend",
     "junction_repeat_count",
     "corridor_7d_score",
+    "cluster_prior_events",
+    "cluster_closure_rate",
     "veh_type_encoded",
 ]
 
@@ -130,6 +141,11 @@ CLOSURE_FEATURES = [
     "is_weekend",
     "junction_repeat_count",
     "corridor_7d_score",
+    # NOTE: the hotspot cluster features (cluster_prior_events, cluster_closure_rate)
+    # were TESTED here and *hurt* the chronological-holdout closure AUC
+    # (0.695 -> 0.63 — the per-cluster rate is too noisy at a 7% base rate), so
+    # they are deliberately excluded from closure. They help severity & duration,
+    # where they're kept. Measured, not assumed.
     "veh_type_encoded",
 ]
 
@@ -343,6 +359,65 @@ def train_duration_predictor(df: pd.DataFrame, models_dir: Path) -> XGBRegressor
 # Road-closure predictor (real, observed, pre-event target)
 # ---------------------------------------------------------------------------
 
+def _walk_forward_closure(X: pd.DataFrame, y: pd.Series, params: dict,
+                          n_splits: int = 5) -> dict:
+    """
+    Expanding-window (walk-forward) backtest of the closure model.
+
+    A single 80/20 chronological split is one noisy point estimate on ~600 test
+    rows. This runs `n_splits` expanding folds (train on the past, test on the
+    next slice) and returns the mean ± std ROC-AUC / PR-AUC, so the headline
+    number comes with a variance band instead of a lone figure.
+    """
+    tscv = TimeSeriesSplit(n_splits=n_splits)
+    rocs, prs = [], []
+    for tr, te in tscv.split(X):
+        ytr, yte = y.iloc[tr], y.iloc[te]
+        if yte.nunique() < 2 or int(ytr.sum()) == 0:
+            continue
+        spw = (ytr == 0).sum() / max(int(ytr.sum()), 1)
+        m = XGBClassifier(objective="binary:logistic", eval_metric="logloss",
+                          scale_pos_weight=spw, **params)
+        m.fit(X.iloc[tr], ytr)
+        p = m.predict_proba(X.iloc[te])[:, 1]
+        rocs.append(float(roc_auc_score(yte, p)))
+        prs.append(float(average_precision_score(yte, p)))
+    if not rocs:
+        return {"n_folds": 0}
+    return {
+        "n_folds":      len(rocs),
+        "roc_auc_mean": round(float(np.mean(rocs)), 3),
+        "roc_auc_std":  round(float(np.std(rocs)), 3),
+        "pr_auc_mean":  round(float(np.mean(prs)), 3),
+        "roc_auc_folds": [round(r, 3) for r in rocs],
+    }
+
+
+def _cost_optimal_threshold(y_true, proba, fn_fp_ratio: float = 5.0) -> dict:
+    """
+    Pick the barricade probability threshold from an explicit cost tradeoff
+    instead of asserting 0.30. A missed real closure (false "no barricade" → no
+    crew when a road actually shuts) is far costlier than a wasted barricade, so
+    each false negative is weighted `fn_fp_ratio`× a false positive. We return
+    the threshold minimising total cost, plus the precision/recall/cost curve.
+    """
+    grid = np.round(np.arange(0.05, 0.95, 0.05), 2)
+    curve, best_t, best_cost = [], 0.5, float("inf")
+    for t in grid:
+        pred = (proba >= t).astype(int)
+        tp = int(((pred == 1) & (y_true == 1)).sum())
+        fp = int(((pred == 1) & (y_true == 0)).sum())
+        fn = int(((pred == 0) & (y_true == 1)).sum())
+        prec = tp / (tp + fp) if (tp + fp) else 0.0
+        rec = tp / (tp + fn) if (tp + fn) else 0.0
+        cost = fn_fp_ratio * fn + fp
+        curve.append({"threshold": float(t), "precision": round(prec, 3),
+                      "recall": round(rec, 3), "cost": round(float(cost), 1)})
+        if cost < best_cost:
+            best_t, best_cost = float(t), cost
+    return {"threshold": best_t, "fn_fp_ratio": fn_fp_ratio, "curve": curve}
+
+
 def train_closure_predictor(df: pd.DataFrame, models_dir: Path):
     """
     Predict P(requires_road_closure) — a real observed outcome, not a synthetic
@@ -392,6 +467,21 @@ def train_closure_predictor(df: pd.DataFrame, models_dir: Path):
         base_rate, roc, pr, recall, precision,
     )
 
+    # Walk-forward backtest — a variance band around the single-split headline.
+    wf = _walk_forward_closure(X, y, params, n_splits=5)
+    if wf.get("n_folds"):
+        logger.info(
+            "Closure walk-forward (%d folds) — ROC-AUC %.3f ± %.3f  (folds: %s)",
+            wf["n_folds"], wf["roc_auc_mean"], wf["roc_auc_std"], wf["roc_auc_folds"],
+        )
+
+    # Cost-derived barricade threshold (replaces the asserted 0.30).
+    bt = _cost_optimal_threshold(y_test, proba, fn_fp_ratio=5.0)
+    logger.info(
+        "Barricade threshold (cost-optimal, FN=%gx FP): %.2f",
+        bt["fn_fp_ratio"], bt["threshold"],
+    )
+
     payload = {
         "model":      clf,
         "features":   CLOSURE_FEATURES,
@@ -401,6 +491,10 @@ def train_closure_predictor(df: pd.DataFrame, models_dir: Path):
         "recall":     recall,
         "precision":  precision,
         "threshold":  0.5,
+        "walk_forward": wf,
+        "barricade_threshold": bt["threshold"],
+        "barricade_fn_fp_ratio": bt["fn_fp_ratio"],
+        "barricade_threshold_curve": bt["curve"],
         "lib_versions": lib_versions(),
     }
     joblib.dump(payload, models_dir / "closure_predictor.pkl")

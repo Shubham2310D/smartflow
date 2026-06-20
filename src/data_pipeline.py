@@ -197,6 +197,54 @@ def _clean_junction(df: pd.DataFrame) -> pd.DataFrame:
 # Public entry point
 # ---------------------------------------------------------------------------
 
+# Bengaluru bounding box (deg) — points outside this are bad coordinates.
+_BLR_BBOX = {"lat": (12.5, 13.5), "lon": (77.2, 77.9)}
+_REQUIRED_COLS = ["id", "latitude", "longitude", "start_datetime", "event_cause", "status"]
+
+
+def validate_schema(df: pd.DataFrame, raise_on_critical: bool = True) -> list[str]:
+    """
+    Lightweight schema/range check on the cleaned feed — catches a dirty or
+    schema-drifted upload before it silently poisons features and models.
+
+    Raises on a *critical* problem (a required column missing entirely); returns
+    a list of non-fatal warnings (out-of-range coords, high null rates, unknown
+    statuses) for everything else. A Pandera schema could formalise this later;
+    this keeps it dependency-free.
+    """
+    issues: list[str] = []
+
+    missing = [c for c in _REQUIRED_COLS if c not in df.columns]
+    if missing:
+        msg = f"missing required columns: {missing}"
+        if raise_on_critical:
+            raise ValueError(f"Ingest validation failed — {msg}")
+        issues.append(msg)
+        return issues
+
+    for axis, col in (("lat", "latitude"), ("lon", "longitude")):
+        lo, hi = _BLR_BBOX[axis]
+        vals = pd.to_numeric(df[col], errors="coerce")
+        out = int(((vals < lo) | (vals > hi)).sum())
+        if out:
+            issues.append(f"{col}: {out} value(s) outside Bengaluru range [{lo}, {hi}]")
+
+    nat = int(pd.to_datetime(df["start_datetime"], errors="coerce").isna().sum())
+    if nat:
+        issues.append(f"start_datetime: {nat} unparseable/NaT row(s)")
+
+    for col in ("event_cause", "status", "id"):
+        nulls = int(df[col].isna().sum())
+        if nulls:
+            issues.append(f"{col}: {nulls} null(s)")
+
+    for msg in issues:
+        logger.warning("Ingest validation: %s", msg)
+    if not issues:
+        logger.info("Ingest validation: clean (%d rows, all checks passed)", len(df))
+    return issues
+
+
 def run_pipeline(project_root: Path | None = None) -> pd.DataFrame:
     """
     Run the full cleaning pipeline.
@@ -229,6 +277,8 @@ def run_pipeline(project_root: Path | None = None) -> pd.DataFrame:
     df = _clean_zone(df)
     df = _clean_veh_type(df)
     df = _clean_junction(df)
+
+    validate_schema(df)
 
     out_dir = project_root / "data" / "processed"
     out_dir.mkdir(parents=True, exist_ok=True)

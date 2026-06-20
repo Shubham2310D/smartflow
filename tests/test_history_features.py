@@ -17,10 +17,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 import history_features as hf
 
 
-def test_returns_both_history_features_as_ints():
+def test_returns_history_features_with_correct_types():
     out = hf.history_features("any-corridor")
-    assert set(out) == {"corridor_7d_score", "junction_repeat_count"}
-    assert all(isinstance(v, int) for v in out.values())
+    # count-like features are ints; the cluster closure rate is a float in [0,1]
+    assert isinstance(out["corridor_7d_score"], int)
+    assert isinstance(out["junction_repeat_count"], int)
+    if "cluster_closure_rate" in out:
+        assert isinstance(out["cluster_closure_rate"], float)
+        assert 0.0 <= out["cluster_closure_rate"] <= 1.0
+        assert isinstance(out["cluster_prior_events"], int)
 
 
 def test_unknown_corridor_falls_back_to_global_not_constant():
