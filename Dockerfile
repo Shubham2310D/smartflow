@@ -24,8 +24,7 @@ EXPOSE 8501
 # Health is checked by the platform over HTTP at /_stcore/health (Render's health
 # check path), so no Docker-level HEALTHCHECK is needed.
 #
-# Shell form so ${PORT} expands. Bind 0.0.0.0:$PORT; CORS/XSRF off so Streamlit's
-# websocket connects through a cloud reverse proxy.
-CMD streamlit run dashboard/app.py \
-    --server.port=${PORT:-8501} --server.address=0.0.0.0 --server.headless=true \
-    --browser.gatherUsageStats=false --server.enableCORS=false --server.enableXsrfProtection=false
+# Exec/JSON form (linter-preferred) wrapping `sh -c` so ${PORT} still expands.
+# Bind 0.0.0.0:$PORT; CORS/XSRF off so Streamlit's websocket connects through a
+# cloud reverse proxy.
+CMD ["sh", "-c", "streamlit run dashboard/app.py --server.port=${PORT:-8501} --server.address=0.0.0.0 --server.headless=true --browser.gatherUsageStats=false --server.enableCORS=false --server.enableXsrfProtection=false"]
