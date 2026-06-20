@@ -55,7 +55,7 @@ SmartFlow is built on 8,057 real Bengaluru traffic incidents (Astram dataset, cl
 | **Roster Optimizer** | Min-cost-flow allocation of a fixed officer roster across simultaneous events — high-priority first, travel minimised (the *optimal* in "optimal deployment") |
 | **Event Planner** | Advance what-if for a known upcoming event (type + place + date/time) → impact forecast + full deployment plan, grounded in similar past events with a confidence rating |
 | **Case-Based Forecast** | Retrieves similar past events (graceful backoff: nearby → type-in-zone → type-citywide → similar) and what they actually required, with a confidence tier |
-| **Feedback Loop** | Logs each decision and tracks predicted-vs-actual — the basis for periodic retraining |
+| **Feedback Loop** | Logs each decision, tracks predicted-vs-actual, and **closes the loop**: `learning_loop.py` re-fits and records a drift snapshot to `metrics_history.csv` |
 | **Real-time API** | `POST /event` (FastAPI) runs the same predict → recommend → log path for streaming use |
 
 ---
@@ -109,7 +109,8 @@ smartflow/
 │   ├── event_analog.py        # Case-based retrieval (backoff + confidence)
 │   ├── event_planner.py       # Advance plan for an upcoming event (impact + deployment)
 │   ├── history_features.py    # Backward-looking history lookup for inference
-│   ├── outcomes_log.py        # Decision/outcome log (learning loop)
+│   ├── outcomes_log.py        # Decision/outcome log (append-only CSV)
+│   ├── learning_loop.py       # Closes the loop: retrain + metrics_history drift
 │   └── utils.py               # Zone/station mappings, constants
 ├── dashboard/
 │   ├── app.py                 # Home page
@@ -127,7 +128,8 @@ smartflow/
 │   ├── test_leakage.py        # Asserts history features are backward-looking
 │   ├── test_history_features.py # Asserts inference uses real history, not a constant
 │   ├── test_roster_optimizer.py # Asserts allocation conserves demand & triages by priority
-│   └── test_event_planner.py  # Asserts confidence backoff & obstruction handling
+│   ├── test_event_planner.py  # Asserts confidence backoff & obstruction handling
+│   └── test_learning_loop.py  # Asserts the loop reads outcomes back & records drift
 ├── data/
 │   ├── raw/                   # Place events.csv here
 │   └── processed/             # Auto-generated outputs
@@ -218,6 +220,7 @@ Open [http://localhost:8501](http://localhost:8501) in your browser.
 - **Honest cluster footprints** — clusters render as fixed-radius circles around the centroid, not convex hulls. Hulls over road-aligned incidents produce giant triangles that overstate the affected area.
 - **DBSCAN over k-means** — no need to pre-specify cluster count; naturally handles noise; 200 m haversine radius tuned to Bengaluru block size.
 - **Median over mean for clearance** — 9.7% of tickets were never properly closed, inflating the mean to 552 min. Median (57 min) reflects real operational close-time.
+- **The post-event learning loop is closed in code, not just logged** — the brief names "no post-event learning system" as a core pain. Logging alone is an open loop, so `learning_loop.py` reads `decisions_log.csv` back to measure recommendation-vs-actual accuracy (clearance MAE + severity accuracy), re-fits the models, and appends a snapshot to `metrics_history.csv`. Run on a schedule, that file makes **drift across retrains** visible on the Feedback Loop page — the difference between a loop that's real and one that's merely scaffolded. (Honest scope: the re-fit reads the canonical feature set, which grows as the pipeline ingests resolved events; a raw log row lacks the engineered features to train on directly.)
 
 ---
 
@@ -240,6 +243,6 @@ We'd rather state these than have a reviewer find them:
 ## Roadmap
 
 - External impact signal (OSM lane count / typical-speed feed) so a closure on an 8-lane arterial scores differently from a side street — the missing piece for true impact forecasting
-- Consume `decisions_log.csv`: nightly re-fit of the resource-rule constants and model retraining (close the learning loop, not just log it)
+- Schedule `learning_loop.py` (cron) and auto-ingest newly-resolved logged events into the feature set — the loop is now closed in code (retrain + `metrics_history.csv` drift tracking); what remains is automating the cadence
 - Stronger multilingual text models (embeddings) over `description`
 - Extend coverage across the monsoon season

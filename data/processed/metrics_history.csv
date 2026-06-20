@@ -1,0 +1,2 @@
+recorded_at,n_decisions,n_outcomes,rec_clearance_mae,rec_severity_accuracy,closure_roc_auc,closure_pr_auc,severity_test_acc,severity_baseline_acc,duration_mae,duration_baseline_mae
+2026-06-20 09:00:00,5,5,13.2,80.0,0.6950286972155634,0.17041903328848593,0.750620347394541,0.6315136476426799,106.89192782762815,106.21096080672092

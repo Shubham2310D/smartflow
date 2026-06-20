@@ -21,6 +21,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from learning_loop import evaluate_decisions, load_history
 from outcomes_log import load_decisions, summary
 
 st.set_page_config(page_title="Feedback Loop | SmartFlow", page_icon="🔁", layout="wide")
@@ -138,13 +139,17 @@ if dec.empty:
         "accumulate into the retraining set."
     )
 else:
-    d1, d2, d3, d4 = st.columns(4)
+    ev = evaluate_decisions()
+    d1, d2, d3, d4, d5 = st.columns(5)
     d1.metric("Decisions logged", f"{stats['total']:,}")
     d2.metric("With recorded outcome", f"{stats['with_outcome']:,}")
-    d3.metric("Outcome MAE",
+    d3.metric("Clearance MAE",
               f"{stats['mae']:.0f} min" if stats["mae"] is not None else "—")
     d4.metric("Within ±30%",
               f"{stats['within_30pct']:.0f}%" if stats.get("within_30pct") is not None else "—")
+    d5.metric("Severity accuracy",
+              f"{ev['severity_accuracy']:.0f}%" if ev.get("severity_accuracy") is not None else "—",
+              help="Logged predicted severity vs the operator-recorded actual severity.")
 
     closed = dec.copy()
     closed["actual_clearance_min"] = pd.to_numeric(
@@ -174,17 +179,46 @@ st.divider()
 # 3. Retraining hook
 # ---------------------------------------------------------------------------
 
-st.header("3 · How the loop closes")
+st.header("3 · Retrain & drift tracking")
 st.markdown(
     """
-    1. **Predict** — every event gets a severity class and clearance forecast.
-    2. **Deploy** — operators act on the recommendation from the Resource Plan.
-    3. **Record** — the realized clearance time and severity are logged back here.
-    4. **Retrain** — once enough outcomes accumulate, `decisions_log.csv` is
-       appended to the training set and `model_training.py` is re-run, so the
-       model learns from what actually happened on Bengaluru roads.
-
-    The backtest above is the *current* model's honest baseline. As real outcomes
-    flow in, the gap between predicted and actual is what the next model closes.
+    The loop is **closed in code**, not just described:
+    1. **Predict** → 2. **Deploy** → 3. **Record** (above) →
+    4. **Retrain** — `python src/learning_loop.py` re-fits the models and appends
+       a metrics + recommendation-accuracy snapshot to `metrics_history.csv`.
+       Run it on a schedule and the chart below shows drift across retrains.
     """
 )
+
+hist = load_history()
+if hist.empty:
+    st.info(
+        "No retrain snapshots yet. Run `python src/learning_loop.py` from smartflow/ "
+        "(add `--no-retrain` to only record current metrics) to populate "
+        "`metrics_history.csv`."
+    )
+else:
+    metric_cols = {
+        "closure_roc_auc":   "Closure ROC-AUC",
+        "severity_test_acc": "Severity accuracy",
+        "rec_severity_accuracy": "Recommendation severity acc (logged, %)",
+    }
+    present = [c for c in metric_cols if c in hist.columns and hist[c].notna().any()]
+    fig = go.Figure()
+    for c in present:
+        fig.add_trace(go.Scatter(
+            x=hist["recorded_at"], y=hist[c], mode="lines+markers", name=metric_cols[c]))
+    fig.update_layout(
+        title="Model metrics across retrains (drift)", height=360,
+        margin=dict(t=40, b=10), xaxis_title="Retrain snapshot",
+        legend=dict(orientation="h", y=1.12),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+    st.caption(
+        f"{len(hist)} snapshot(s) recorded. Each `learning_loop.py` run adds one — "
+        "stable lines mean no drift yet; a drop flags that real outcomes have moved "
+        "away from the model and a retrain on fresh data is due."
+    )
+    with st.expander("Raw metrics history"):
+        st.dataframe(hist.sort_values("recorded_at", ascending=False),
+                     use_container_width=True, hide_index=True)
