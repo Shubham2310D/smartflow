@@ -12,6 +12,7 @@ sys.path.insert(0, str(_ROOT / "src"))
 
 import streamlit as st
 
+from event_analog import PLANNED_CAUSES, find_analogs
 from outcomes_log import log_decision
 from resource_recommender import recommend
 from utils import ALL_CAUSES, ALL_ZONES, CAUSE_DISPLAY
@@ -105,6 +106,9 @@ duration_for_rec = float(dur_override) if dur_override > 0 else (
     default_dur if default_dur else None
 )
 
+# Carry the calibrated closure probability from the last prediction (Page 2)
+closure_prob = prev.get("closure_probability") if prev else None
+
 rec = recommend(
     severity_class        = sev_choice,
     event_cause           = cause_key,
@@ -112,6 +116,7 @@ rec = recommend(
     hour_of_day           = hour_sel,
     zone                  = zone_sel,
     duration_minutes      = duration_for_rec,
+    closure_probability   = closure_prob,
 )
 
 # ---------------------------------------------------------------------------
@@ -159,9 +164,50 @@ with c3:
     _card("Diversion Recommended", div_val, color=div_color)
 
 with c4:
-    _card("Estimated Clearance", rec["estimated_clearance_minutes"], "min", "#198754")
+    _card(
+        "Typical Clearance",
+        f"{rec['estimated_clearance_minutes']}",
+        f"min  ({rec.get('clearance_low','?')}–{rec.get('clearance_high','?')})",
+        "#198754",
+    )
+
+st.caption(
+    "Clearance is the **median historical close-time** for this cause (with IQR), "
+    "not a model forecast — see the Feedback Loop page for why."
+    + (f"  ·  Model road-closure likelihood: **{closure_prob*100:.0f}%**."
+       if closure_prob is not None else "")
+)
 
 st.divider()
+
+# ---------------------------------------------------------------------------
+# Planned-event historical analogs (the forecastable half of the brief)
+# ---------------------------------------------------------------------------
+
+if cause_key in PLANNED_CAUSES:
+    st.divider()
+    st.subheader("Similar Past Events (Case-Based Forecast)")
+    st.caption(
+        "Planned events have a known type and place ahead of time. Here is what "
+        "the most similar past events actually required — grounded in history, not a model."
+    )
+    analog = find_analogs(cause_key, zone=zone_sel)
+    if analog.get("found"):
+        a1, a2, a3 = st.columns(3)
+        a1.metric(f"Past {CAUSE_DISPLAY.get(cause_key, cause_key)}s", analog["found"],
+                  help=f"Scope: {analog['scope']}")
+        if analog.get("median_clearance") is not None:
+            a2.metric("Their median clearance",
+                      f"{analog['median_clearance']:.0f} min",
+                      delta=f"range {analog.get('p25_clearance',0):.0f}–{analog.get('p75_clearance',0):.0f}",
+                      delta_color="off")
+        if analog.get("closure_rate") is not None:
+            a3.metric("Needed road closure", f"{analog['closure_rate']:.0f}%")
+        if analog.get("samples") is not None and len(analog["samples"]):
+            with st.expander("View the matched past events"):
+                st.dataframe(analog["samples"], use_container_width=True, hide_index=True)
+    else:
+        st.info("No comparable past events of this type in the dataset.")
 
 # ---------------------------------------------------------------------------
 # Dispatch & context

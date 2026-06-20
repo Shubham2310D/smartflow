@@ -24,6 +24,7 @@ from feature_engineering import (
     extract_semantic_type,
 )
 from model_training import FEATURES, SEVERITY_COLORS, SEVERITY_INVERSE_MAP
+from resource_recommender import clearance_range
 from utils import ALL_CAUSES, ALL_ZONES, CAUSE_DISPLAY, get_nearest_station
 
 st.set_page_config(page_title="Predict Event | SmartFlow", page_icon="🔮", layout="wide")
@@ -34,16 +35,18 @@ st.set_page_config(page_title="Predict Event | SmartFlow", page_icon="🔮", lay
 
 _CLF_PATH = _ROOT / "models" / "severity_classifier.pkl"
 _DUR_PATH = _ROOT / "models" / "duration_predictor.pkl"
+_CLO_PATH = _ROOT / "models" / "closure_predictor.pkl"
 _FEATS_PATH = _ROOT / "data" / "processed" / "features.csv"
 
 
 @st.cache_resource(show_spinner="Loading models…")
 def load_models():
     if not _CLF_PATH.exists() or not _DUR_PATH.exists():
-        return None, None
+        return None, None, None
     clf_pkg = joblib.load(_CLF_PATH)
     dur_pkg = joblib.load(_DUR_PATH)
-    return clf_pkg, dur_pkg
+    clo_pkg = joblib.load(_CLO_PATH) if _CLO_PATH.exists() else None
+    return clf_pkg, dur_pkg, clo_pkg
 
 
 @st.cache_data(show_spinner=False)
@@ -65,9 +68,9 @@ def load_feature_stats():
 # ---------------------------------------------------------------------------
 
 st.title("Predict Event")
-st.caption("Enter event details to get severity classification + clearance time forecast")
+st.caption("Severity triage · road-closure likelihood · typical clearance range")
 
-clf_pkg, dur_pkg = load_models()
+clf_pkg, dur_pkg, clo_pkg = load_models()
 if clf_pkg is None:
     st.error(
         "Models not found. Run `python src/model_training.py` from smartflow/ first."
@@ -76,7 +79,16 @@ if clf_pkg is None:
 
 clf_model = clf_pkg["model"]
 dur_model = dur_pkg["model"]
+clo_model = clo_pkg["model"] if clo_pkg else None
 feat_stats = load_feature_stats()
+
+st.info(
+    "**What each input drives:** *Cause / description / vehicle / time* feed the "
+    "models. *Corridor* sets the history-based junction & corridor-pressure features. "
+    "*Zone* selects the dispatch station on the Resource Plan — it does **not** change "
+    "the severity model. Severity is a **rules-based triage** label; road-closure "
+    "likelihood is the genuinely learned, calibrated model."
+)
 
 # Known corridors for the dropdown
 all_corridors = sorted(feat_stats.keys()) if feat_stats else ["Non-corridor"]
@@ -161,34 +173,35 @@ if submitted:
         "veh_type_encoded":       _VEH_TYPE_MAP.get(veh_type, len(_VEH_TYPE_ORDER) - 1),
     }
     X_clf = pd.DataFrame([all_feat_vals])[clf_pkg["features"]]
-    X_dur = pd.DataFrame([all_feat_vals])[dur_pkg["features"]]
 
-    # --- Classification ---
+    # --- Severity triage (rules-based label, contextual model) ---
     clf_probs     = clf_model.predict_proba(X_clf)[0]
     clf_class_idx = int(np.argmax(clf_probs))
     severity      = SEVERITY_INVERSE_MAP[clf_class_idx]
     confidence    = float(clf_probs[clf_class_idx])
 
-    # --- Regression ---
-    raw_pred      = float(dur_model.predict(X_dur)[0])
-    if dur_pkg.get("log_transform"):
-        import numpy as _np
-        duration_pred = float(_np.expm1(raw_pred))
-    else:
-        duration_pred = raw_pred
-    duration_pred = max(1.0, min(duration_pred, 1440.0))
+    # --- Road-closure likelihood (real observed target, calibrated) ---
+    closure_prob = None
+    if clo_model is not None:
+        X_clo = pd.DataFrame([all_feat_vals])[clo_pkg["features"]]
+        closure_prob = float(clo_model.predict_proba(X_clo)[0][1])
+    base_rate = clo_pkg.get("base_rate", 0.074) if clo_pkg else 0.074
+
+    # --- Typical clearance (empirical range, NOT a model forecast) ---
+    cr = clearance_range(cause)
 
     # Store in session_state for Page 3
     st.session_state["last_prediction"] = {
-        "severity":         severity,
-        "confidence":       confidence,
-        "duration_minutes": duration_pred,
-        "event_cause":      cause,
-        "road_closure":     road_closure,
-        "hour_of_day":      hour,
-        "zone":             zone,
-        "corridor":         corridor,
-        "X_input":          X_clf.to_dict("records")[0],
+        "severity":            severity,
+        "confidence":          confidence,
+        "closure_probability": closure_prob,
+        "duration_minutes":    cr["median"],
+        "event_cause":         cause,
+        "road_closure":        road_closure,
+        "hour_of_day":         hour,
+        "zone":                zone,
+        "corridor":            corridor,
+        "X_input":             X_clf.to_dict("records")[0],
     }
 
     # ---------------------------------------------------------------------------
@@ -203,15 +216,27 @@ if submitted:
     r1, r2, r3 = st.columns(3)
     r1.markdown(
         f"<div style='background:{sev_color};padding:20px;border-radius:10px;text-align:center;"
-        f"color:white;font-size:1.4em;font-weight:bold;'>"
-        f"Severity: {severity}</div>",
+        f"color:white;font-size:1.1em;font-weight:bold;'>"
+        f"Severity (triage): {severity}</div>",
         unsafe_allow_html=True,
     )
-    r2.metric("Estimated Clearance", f"{duration_pred:.0f} min",
-              delta=f"{duration_pred/60:.1f} hrs")
-    r3.metric("Model Score", f"{confidence*100:.1f}%",
-              help="Raw XGBoost class probability (uncalibrated) — a relative "
-                   "confidence indicator, not a true probability.")
+    if closure_prob is not None:
+        mult = closure_prob / base_rate if base_rate else 0
+        r2.metric("Road-Closure Likelihood", f"{closure_prob*100:.0f}%",
+                  delta=f"{mult:.1f}× base rate ({base_rate*100:.0f}%)",
+                  delta_color="inverse",
+                  help="Calibrated probability from the road-closure model "
+                       f"(ROC-AUC {clo_pkg.get('roc_auc', 0):.2f}). This is the "
+                       "genuinely learned signal on a real observed outcome.")
+    else:
+        r2.metric("Road-Closure Likelihood", "n/a")
+    r3.metric("Typical Clearance",
+              f"{cr['median']:.0f} min",
+              delta=f"range {cr.get('p25', cr['median']):.0f}–{cr.get('p75', cr['median']):.0f} min",
+              delta_color="off",
+              help=f"Median time-to-close for {cause} across {cr.get('n','?')} past "
+                   "events (administrative close-time). NOT a model forecast — the "
+                   "regressor does not beat this median (see Feedback Loop).")
 
     if desc_text and desc_text.strip():
         if semantic_type != "other":

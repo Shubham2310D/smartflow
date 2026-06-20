@@ -22,7 +22,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from scipy.spatial import ConvexHull, QhullError
 from sklearn.cluster import DBSCAN
 
 logger = logging.getLogger(__name__)
@@ -84,22 +83,41 @@ def _impute_zones(df: pd.DataFrame, zone_centroids: pd.DataFrame) -> pd.DataFram
 
 
 # ---------------------------------------------------------------------------
-# Constants (mirror config.yaml defaults)
+# Config (read from config.yaml; falls back to these defaults)
 # ---------------------------------------------------------------------------
 
-_CLUSTER_RADIUS_KM = 0.2     # 200 m search radius for DBSCAN (tighter, more granular)
 _EARTH_RADIUS_KM   = 6371.0
-DBSCAN_EPS         = _CLUSTER_RADIUS_KM / _EARTH_RADIUS_KM  # radians for haversine
-DBSCAN_MIN_SAMPLES = 5
+_DEFAULTS = {"dbscan_eps_km": 0.2, "dbscan_min_samples": 5,
+             "kde_bandwidth": 0.04, "cluster_buffer_km": 0.2}
+
+
+def _hotspot_cfg(project_root: Path) -> dict:
+    """Load the hotspot section of config.yaml (single source of truth)."""
+    cfg = dict(_DEFAULTS)
+    try:
+        import yaml
+        loaded = yaml.safe_load((project_root / "config.yaml").read_text()) or {}
+        for k, v in (loaded.get("hotspot", {}) or {}).items():
+            if k in cfg:
+                cfg[k] = v
+    except Exception as exc:
+        logger.warning("config.yaml not read (%s); using defaults", exc)
+    return cfg
+
+
+# Module-level defaults (overridden per-run from config)
+DBSCAN_EPS         = _DEFAULTS["dbscan_eps_km"] / _EARTH_RADIUS_KM  # radians
+DBSCAN_MIN_SAMPLES = _DEFAULTS["dbscan_min_samples"]
 
 
 # ---------------------------------------------------------------------------
 # 1. DBSCAN clustering
 # ---------------------------------------------------------------------------
 
-def run_dbscan(df: pd.DataFrame) -> pd.DataFrame:
+def run_dbscan(df: pd.DataFrame, eps_rad: float = DBSCAN_EPS,
+               min_samples: int = DBSCAN_MIN_SAMPLES) -> pd.DataFrame:
     coords = df[["latitude", "longitude"]].values
-    db = DBSCAN(eps=DBSCAN_EPS, min_samples=DBSCAN_MIN_SAMPLES, metric="haversine",
+    db = DBSCAN(eps=eps_rad, min_samples=min_samples, metric="haversine",
                 algorithm="ball_tree", n_jobs=-1)
     # haversine expects radians
     coords_rad = np.radians(coords)
@@ -201,27 +219,25 @@ def compute_morans_i(df: pd.DataFrame) -> dict:
 # 4. GeoJSON polygon builder
 # ---------------------------------------------------------------------------
 
-def _polygon_coords(lats: np.ndarray, lons: np.ndarray) -> list:
-    """GeoJSON ring coordinates [[lon, lat], ...] with convex hull."""
-    pts = np.column_stack([lons, lats])   # GeoJSON = (lon, lat)
-    if len(pts) < 3:
-        return _square_buffer(lons.mean(), lats.mean(), d=0.004)
-    try:
-        hull = ConvexHull(pts)
-        ring = pts[hull.vertices].tolist()
-        ring.append(ring[0])              # close ring
-        return [ring]
-    except (QhullError, Exception):
-        return _square_buffer(lons.mean(), lats.mean(), d=0.004)
+def _circle_coords(lat: float, lon: float, radius_km: float = 0.2, n: int = 28) -> list:
+    """
+    GeoJSON ring approximating a circle of `radius_km` around (lat, lon).
+
+    A fixed-radius circle around the cluster centroid is an honest depiction of
+    the affected area.  A convex hull over road-aligned incidents produces giant
+    triangles that wildly overstate the footprint, so we deliberately avoid it.
+    """
+    dlat = radius_km / 110.574                                   # km per deg latitude
+    dlon = radius_km / (111.320 * np.cos(np.radians(lat)) + 1e-9)
+    ring = [
+        [lon + dlon * np.cos(t), lat + dlat * np.sin(t)]
+        for t in np.linspace(0, 2 * np.pi, n)
+    ]
+    ring.append(ring[0])
+    return [ring]
 
 
-def _square_buffer(lon: float, lat: float, d: float = 0.003) -> list:
-    return [[[lon - d, lat - d], [lon + d, lat - d],
-             [lon + d, lat + d], [lon - d, lat + d],
-             [lon - d, lat - d]]]
-
-
-def build_geojson(df: pd.DataFrame) -> dict:
+def build_geojson(df: pd.DataFrame, buffer_km: float = 0.2) -> dict:
     features = []
     for cid, grp in df[df["cluster_label"] >= 0].groupby("cluster_label"):
         lats = grp["latitude"].values
@@ -242,7 +258,7 @@ def build_geojson(df: pd.DataFrame) -> dict:
             "type": "Feature",
             "geometry": {
                 "type":        "Polygon",
-                "coordinates": _polygon_coords(lats, lons),
+                "coordinates": _circle_coords(float(lats.mean()), float(lons.mean()), buffer_km),
             },
             "properties": {
                 "cluster_id":           int(cid),
@@ -328,10 +344,16 @@ def run_hotspot_engine(project_root: Path | None = None) -> dict:
     zone_centroids = _build_zone_centroids(df)
     df = _impute_zones(df, zone_centroids)
 
-    df = run_dbscan(df)
+    cfg = _hotspot_cfg(project_root)
+    eps_rad = cfg["dbscan_eps_km"] / _EARTH_RADIUS_KM
+    logger.info("Hotspot config: eps=%.0f m, min_samples=%d, buffer=%.0f m",
+                cfg["dbscan_eps_km"] * 1000, cfg["dbscan_min_samples"],
+                cfg["cluster_buffer_km"] * 1000)
+
+    df = run_dbscan(df, eps_rad=eps_rad, min_samples=cfg["dbscan_min_samples"])
     heatmap_pts = build_heatmap_points(df)
     morans      = compute_morans_i(df)
-    geojson     = build_geojson(df)
+    geojson     = build_geojson(df, buffer_km=cfg["cluster_buffer_km"])
     hotspots    = rank_hotspots(df)
 
     out_dir = project_root / "data" / "processed"

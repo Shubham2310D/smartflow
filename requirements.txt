@@ -24,6 +24,12 @@ matplotlib>=3.8.0
 # Config
 pyyaml>=6.0
 
+# Optional — real-time API (not needed for the Streamlit demo):
+#   pip install fastapi uvicorn        # then: uvicorn api.main:app --port 8000
+
+# Optional — tests:
+#   pip install pytest                 # then: pytest tests/
+
 # Optional — Moran's I spatial autocorrelation (install separately if needed):
 #   pip install esda libpysal
 

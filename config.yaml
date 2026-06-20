@@ -10,14 +10,15 @@ paths:
   model_ready_csv: data/processed/model_ready.csv
   hotspots_geojson: data/processed/hotspots.geojson
   severity_model: models/severity_classifier.pkl
+  closure_model: models/closure_predictor.pkl
   duration_model: models/duration_predictor.pkl
-  label_encoders: models/label_encoders.pkl
 
 hotspot:
-  dbscan_eps: 0.005        # ~500 m in decimal degrees at Bengaluru latitude
+  dbscan_eps_km: 0.2        # 200 m search radius (haversine; converted to radians in code)
   dbscan_min_samples: 5
-  kde_bandwidth: 0.01
+  kde_bandwidth: 0.04
   moran_significance: 0.05
+  cluster_buffer_km: 0.2    # radius of the rendered cluster circle
 
 severity_scoring:
   # score thresholds: total >= high_threshold → High, >= medium_threshold → Medium
@@ -34,10 +35,22 @@ resource_rules:
     High: 5
   peak_hour_bonus: 1
   road_closure_bonus: 1
-  high_risk_cause_bonus: 1   # accident, flood, water_logging
+  high_risk_cause_bonus: 1
+  high_risk_causes:        # extra personnel for clearance OR crowd control
+    - accident
+    - flood
+    - water_logging
+    - protest
+    - vip_movement
+    - procession
   barricade_causes:
     - accident
     - tree_fall
     - flood
     - water_logging
+    - protest
+    - vip_movement
+    - procession
+    - public_event
   diversion_min_severity: High
+  closure_prob_barricade_threshold: 0.30   # model P(closure) ≥ this → barricade

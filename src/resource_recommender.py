@@ -18,50 +18,74 @@ Priority flag        URGENT  if High, PRIORITY if Medium, ROUTINE if Low
 
 from __future__ import annotations
 
-from utils import get_nearest_station
+import json
+from pathlib import Path
+
+from utils import get_nearest_station, load_config
 
 # ---------------------------------------------------------------------------
-# Scoring tables
+# Rules — loaded from config.yaml (single source of truth), with fallbacks.
 # ---------------------------------------------------------------------------
 
-_BASE_PERSONNEL = {"Low": 2, "Medium": 3, "High": 5}
-
-# Causes that warrant extra personnel.  Crowd/gathering events (protest,
-# vip_movement, procession) need more officers for crowd control, not just
-# clearance.
-_HIGH_RISK_CAUSES = {
-    "accident", "flood", "water_logging",
-    "protest", "vip_movement", "procession",
+_DEFAULT_RULES = {
+    "base_personnel": {"Low": 2, "Medium": 3, "High": 5},
+    "peak_hour_bonus": 1,
+    "road_closure_bonus": 1,
+    "high_risk_cause_bonus": 1,
+    # Crowd/gathering causes (protest, vip_movement, procession) need extra
+    # officers for crowd control, not just clearance.
+    "high_risk_causes": [
+        "accident", "flood", "water_logging",
+        "protest", "vip_movement", "procession",
+    ],
+    "barricade_causes": [
+        "accident", "tree_fall", "flood", "water_logging",
+        "protest", "vip_movement", "procession", "public_event",
+    ],
+    "diversion_min_severity": "High",
+    # P(road closure) at/above which we recommend a barricade even if the
+    # operator hasn't flagged a closure — driven by the calibrated model.
+    "closure_prob_barricade_threshold": 0.30,
 }
 
-_BARRICADE_CAUSES = {
-    "accident", "tree_fall", "flood", "water_logging",
-    "protest", "vip_movement", "procession", "public_event",
-}
+
+def _rules() -> dict:
+    """Merge config.yaml resource_rules over the defaults."""
+    rules = dict(_DEFAULT_RULES)
+    try:
+        cfg = load_config().get("resource_rules", {}) or {}
+        for k, v in cfg.items():
+            rules[k] = v
+    except Exception:
+        pass
+    return rules
+
 
 _PRIORITY_FLAGS = {"High": "URGENT", "Medium": "PRIORITY", "Low": "ROUTINE"}
 
-_DIVERSION_MIN_SEVERITY = {"High"}
+# ---------------------------------------------------------------------------
+# Empirical clearance ranges (cause → median + IQR), from clearance_stats.json.
+# These are real historical close-times, NOT a model forecast.
+# ---------------------------------------------------------------------------
 
-# Estimated baseline clearance time by cause (minutes)
-_CAUSE_BASE_CLEARANCE: dict[str, int] = {
-    "accident":        55,
-    "flood":           90,
-    "water_logging":   70,
-    "tree_fall":       45,
-    "construction":    60,
-    "public_event":    120,
-    "procession":      90,
-    "vip_movement":    60,
-    "protest":         100,
-    "congestion":      45,
-    "road_conditions": 40,
-    "pot_holes":       30,
-    "vehicle_breakdown": 40,
-    "other":           35,
-}
+_clearance_cache: dict | None = None
 
-_SEVERITY_CLEARANCE_MULTIPLIER = {"Low": 0.7, "Medium": 1.0, "High": 1.4}
+
+def _clearance_stats() -> dict:
+    global _clearance_cache
+    if _clearance_cache is None:
+        path = Path(__file__).resolve().parents[1] / "data" / "processed" / "clearance_stats.json"
+        try:
+            _clearance_cache = json.loads(path.read_text())
+        except Exception:
+            _clearance_cache = {"_overall": {"median": 57, "p25": 30, "p75": 120}}
+    return _clearance_cache
+
+
+def clearance_range(cause: str) -> dict:
+    """Return {median, p25, p75, n} for a cause, falling back to overall."""
+    stats = _clearance_stats()
+    return stats.get(cause, stats.get("_overall", {"median": 57, "p25": 30, "p75": 120}))
 
 
 # ---------------------------------------------------------------------------
@@ -75,53 +99,61 @@ def recommend(
     hour_of_day: int,
     zone: str,
     duration_minutes: float | None = None,
+    closure_probability: float | None = None,
 ) -> dict:
     """
     Produce a deployment recommendation for a single event.
 
     Parameters
     ----------
-    severity_class       : 'High' | 'Medium' | 'Low'
-    event_cause          : canonical cause string from CAUSE_SEVERITY_WEIGHT
-    requires_road_closure: bool
+    severity_class       : 'High' | 'Medium' | 'Low' (rules-based triage)
+    event_cause          : canonical cause string
+    requires_road_closure: bool (operator-flagged)
     hour_of_day          : 0–23
     zone                 : zone string from the dataset
-    duration_minutes     : predicted duration from the ML model (optional)
+    duration_minutes     : ignored for the headline estimate — kept for
+                           backward-compat; clearance now uses empirical ranges
+    closure_probability  : calibrated P(road closure) from the model (optional);
+                           a high value triggers a barricade even if not flagged
 
     Returns
     -------
     dict with personnel_count, barricade_required, diversion_recommended,
-         dispatch_from, estimated_clearance_minutes, priority_flag, rationale
+         dispatch_from, clearance range, priority_flag, rationale
     """
-    sev    = severity_class if severity_class in _BASE_PERSONNEL else "Low"
+    rules  = _rules()
+    base_personnel = rules["base_personnel"]
+    high_risk = set(rules["high_risk_causes"])
+    barricade_causes = set(rules["barricade_causes"])
+
+    sev    = severity_class if severity_class in base_personnel else "Low"
     cause  = event_cause if event_cause else "other"
     closure = bool(requires_road_closure)
     is_peak = _is_peak_hour(hour_of_day)
+    closure_prob = float(closure_probability) if closure_probability is not None else None
+    closure_likely = closure_prob is not None and \
+        closure_prob >= rules["closure_prob_barricade_threshold"]
 
     # ---------- Personnel ----------
-    personnel = _BASE_PERSONNEL[sev]
-    personnel += 1 if is_peak and sev in {"Medium", "High"}   else 0
-    personnel += 1 if closure                                  else 0
-    personnel += 1 if cause in _HIGH_RISK_CAUSES               else 0
+    personnel = base_personnel[sev]
+    personnel += rules["peak_hour_bonus"]   if is_peak and sev in {"Medium", "High"} else 0
+    personnel += rules["road_closure_bonus"] if (closure or closure_likely)          else 0
+    personnel += rules["high_risk_cause_bonus"] if cause in high_risk                else 0
 
     # ---------- Barricade ----------
-    barricade = closure or (cause in _BARRICADE_CAUSES)
+    barricade = closure or closure_likely or (cause in barricade_causes)
 
     # ---------- Diversion ----------
-    diversion = sev in _DIVERSION_MIN_SEVERITY
+    diversion = (sev == rules["diversion_min_severity"]) or closure_likely
 
     # ---------- Dispatch station ----------
     station = get_nearest_station(zone)
 
-    # ---------- Clearance estimate ----------
-    if duration_minutes and duration_minutes > 0:
-        clearance = int(round(duration_minutes))
-    else:
-        base = _CAUSE_BASE_CLEARANCE.get(cause, 40)
-        mult = _SEVERITY_CLEARANCE_MULTIPLIER[sev]
-        clearance = int(round(base * mult))
-        if is_peak:
-            clearance = int(round(clearance * 1.2))
+    # ---------- Clearance estimate (empirical range, NOT a model forecast) ----------
+    cr = clearance_range(cause)
+    clearance      = int(round(cr["median"]))
+    clearance_low  = int(round(cr.get("p25", cr["median"])))
+    clearance_high = int(round(cr.get("p75", cr["median"])))
 
     # ---------- Priority flag ----------
     flag = _PRIORITY_FLAGS[sev]
@@ -131,19 +163,25 @@ def recommend(
     if is_peak:
         rationale_parts.append("peak-hour traffic")
     if closure:
-        rationale_parts.append("road closure required")
-    if cause in _HIGH_RISK_CAUSES:
+        rationale_parts.append("operator flagged road closure")
+    elif closure_likely:
+        rationale_parts.append(f"model: closure likely ({closure_prob*100:.0f}%)")
+    if cause in high_risk:
         rationale_parts.append(f"high-risk cause ({cause})")
 
     return {
-        "personnel_count":           personnel,
-        "barricade_required":        barricade,
-        "diversion_recommended":     diversion,
-        "dispatch_from":             station,
+        "personnel_count":             personnel,
+        "barricade_required":          barricade,
+        "diversion_recommended":       diversion,
+        "dispatch_from":               station,
         "estimated_clearance_minutes": clearance,
-        "priority_flag":             flag,
-        "is_peak_hour":              is_peak,
-        "rationale":                 "; ".join(rationale_parts),
+        "clearance_low":               clearance_low,
+        "clearance_high":              clearance_high,
+        "clearance_note":             f"typical close-time for {cause} (median of {cr.get('n','?')} past events)",
+        "closure_probability":         closure_prob,
+        "priority_flag":               flag,
+        "is_peak_hour":                is_peak,
+        "rationale":                   "; ".join(rationale_parts),
     }
 
 
