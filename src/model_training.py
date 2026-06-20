@@ -9,11 +9,14 @@ Outputs (saved to models/):
 """
 
 import logging
+import sys
 from pathlib import Path
 
 import joblib
 import numpy as np
 import pandas as pd
+import sklearn
+import xgboost
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.metrics import (
     average_precision_score,
@@ -28,6 +31,46 @@ from sklearn.utils.class_weight import compute_sample_weight
 from xgboost import XGBClassifier, XGBRegressor
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Reproducibility — record the library versions a model was trained with, so a
+# version-skewed environment (which can silently break or mis-load a pickle) is
+# detected rather than failing mysteriously. Stamped into every model payload;
+# checked at load time (API /health and the dashboard).
+# ---------------------------------------------------------------------------
+
+# Libraries whose version actually governs pickle/predict compatibility.
+_COMPAT_LIBS = ("scikit-learn", "xgboost", "numpy")
+
+
+def lib_versions() -> dict:
+    """Versions of the libraries that matter for model (de)serialisation."""
+    return {
+        "python": sys.version.split()[0],
+        "scikit-learn": sklearn.__version__,
+        "xgboost": xgboost.__version__,
+        "numpy": np.__version__,
+        "pandas": pd.__version__,
+        "joblib": joblib.__version__,
+    }
+
+
+def check_lib_versions(payload: dict) -> list[str]:
+    """
+    Return human-readable warnings for any compatibility-critical library whose
+    runtime version differs from what the model was trained with. Empty list
+    means the environment matches (or the model predates version stamping).
+    """
+    trained = (payload or {}).get("lib_versions") or {}
+    if not trained:
+        return ["model has no recorded training versions — retrain to embed them"]
+    current = lib_versions()
+    return [
+        f"{lib}: trained on {trained[lib]}, running {current[lib]}"
+        for lib in _COMPAT_LIBS
+        if trained.get(lib) and current.get(lib) and trained[lib] != current[lib]
+    ]
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -203,6 +246,7 @@ def train_severity_classifier(df: pd.DataFrame, models_dir: Path) -> XGBClassifi
         "baseline_accuracy": baseline,
         "cv_accuracy_mean": float(cv_scores.mean()),   # optimistic, reference only
         "cv_accuracy_std":  float(cv_scores.std()),
+        "lib_versions":     lib_versions(),
     }
     joblib.dump(payload, models_dir / "severity_classifier.pkl")
     logger.info("Saved severity_classifier.pkl")
@@ -270,6 +314,7 @@ def train_duration_predictor(df: pd.DataFrame, models_dir: Path) -> XGBRegressor
         "baseline_mae": float(baseline_mae),
         "baseline_median": train_median,
         "lift_vs_baseline": float(lift),
+        "lib_versions": lib_versions(),
     }
     joblib.dump(payload, models_dir / "duration_predictor.pkl")
     logger.info("Saved duration_predictor.pkl")
@@ -356,6 +401,7 @@ def train_closure_predictor(df: pd.DataFrame, models_dir: Path):
         "recall":     recall,
         "precision":  precision,
         "threshold":  0.5,
+        "lib_versions": lib_versions(),
     }
     joblib.dump(payload, models_dir / "closure_predictor.pkl")
     logger.info("Saved closure_predictor.pkl")

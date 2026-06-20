@@ -24,7 +24,7 @@ from feature_engineering import (
     extract_semantic_type,
 )
 from history_features import corridor_list, history_features
-from model_training import FEATURES, SEVERITY_COLORS, SEVERITY_INVERSE_MAP
+from model_training import FEATURES, SEVERITY_COLORS, SEVERITY_INVERSE_MAP, check_lib_versions
 from resource_recommender import clearance_range
 from utils import ALL_CAUSES, ALL_ZONES, CAUSE_DISPLAY, get_nearest_station, is_peak_hour
 
@@ -67,6 +67,14 @@ clf_model = clf_pkg["model"]
 dur_model = dur_pkg["model"]
 clo_model = clo_pkg["model"] if clo_pkg else None
 all_corridors = corridor_list()
+
+# Warn (don't fail) if the models were trained under different library versions
+# than this environment — version skew can silently corrupt pickled-model output.
+_ver_warns = check_lib_versions(clf_pkg) + (check_lib_versions(clo_pkg) if clo_pkg else [])
+_ver_warns = [w for w in _ver_warns if "no recorded training versions" not in w]
+if _ver_warns:
+    st.warning("⚠️ Model/runtime library mismatch — predictions may be unreliable: "
+               + "; ".join(_ver_warns) + ". Retrain with `python src/model_training.py`.")
 
 st.info(
     "**What each input drives:** *Cause / description / vehicle / time* feed the "

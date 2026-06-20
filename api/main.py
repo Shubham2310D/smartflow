@@ -33,7 +33,7 @@ from feature_engineering import (  # noqa: E402
     CAUSE_SEVERITY_WEIGHT, _SEMANTIC_MAP, _VEH_TYPE_MAP, _VEH_TYPE_ORDER,
     extract_semantic_type,
 )
-from model_training import SEVERITY_INVERSE_MAP  # noqa: E402
+from model_training import SEVERITY_INVERSE_MAP, check_lib_versions  # noqa: E402
 from outcomes_log import log_decision  # noqa: E402
 from history_features import history_features  # noqa: E402
 from resource_recommender import clearance_range, recommend  # noqa: E402
@@ -64,7 +64,15 @@ class Event(BaseModel):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "closure_model": _clo is not None}
+    # Flag any model trained under a different sklearn/xgboost/numpy than the
+    # runtime — version skew can silently break a pickled model.
+    warns = check_lib_versions(_clf) + (check_lib_versions(_clo) if _clo else [])
+    return {
+        "status": "ok",
+        "closure_model": _clo is not None,
+        "model_versions": _clf.get("lib_versions"),
+        "version_warnings": warns,
+    }
 
 
 @app.post("/event")

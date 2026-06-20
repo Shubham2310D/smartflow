@@ -129,7 +129,8 @@ smartflow/
 │   ├── test_history_features.py # Asserts inference uses real history, not a constant
 │   ├── test_roster_optimizer.py # Asserts allocation conserves demand & triages by priority
 │   ├── test_event_planner.py  # Asserts confidence backoff & obstruction handling
-│   └── test_learning_loop.py  # Asserts the loop reads outcomes back & records drift
+│   ├── test_learning_loop.py  # Asserts the loop reads outcomes back & records drift
+│   └── test_model_versioning.py # Asserts version-skew detection for pickled models
 ├── data/
 │   ├── raw/                   # Place events.csv here
 │   └── processed/             # Auto-generated outputs
@@ -198,7 +199,7 @@ docker run -p 8501:8501 smartflow      # → http://localhost:8501
 ### Tests & CI
 
 ```bash
-pytest tests/        # 15 tests: leakage, history lookup, optimizer, planner, learning loop
+pytest tests/        # 19 tests: leakage, history lookup, optimizer, planner, learning loop, versioning
 ```
 
 [GitHub Actions](.github/workflows/ci.yml) runs the test suite **and** a Docker image build on every push / PR.
@@ -239,6 +240,7 @@ pytest tests/        # 15 tests: leakage, history lookup, optimizer, planner, le
 - **Honest cluster footprints** — clusters render as fixed-radius circles around the centroid, not convex hulls. Hulls over road-aligned incidents produce giant triangles that overstate the affected area.
 - **DBSCAN over k-means** — no need to pre-specify cluster count; naturally handles noise; 200 m haversine radius tuned to Bengaluru block size.
 - **Median over mean for clearance** — 9.7% of tickets were never properly closed, inflating the mean to 552 min. Median (57 min) reflects real operational close-time.
+- **Models record the versions they were trained with** — a pickled sklearn/xgboost model can silently break or mis-load under a different library version. Each model payload stamps its `scikit-learn` / `xgboost` / `numpy` (and python/pandas) versions; `check_lib_versions()` compares them to the runtime and the API `/health` endpoint and the dashboard surface a non-fatal warning on skew, so a version-mismatched environment is flagged rather than failing mysteriously.
 - **The post-event learning loop is closed in code, not just logged** — the brief names "no post-event learning system" as a core pain. Logging alone is an open loop, so `learning_loop.py` reads `decisions_log.csv` back to measure recommendation-vs-actual accuracy (clearance MAE + severity accuracy), re-fits the models, and appends a snapshot to `metrics_history.csv`. Run on a schedule, that file makes **drift across retrains** visible on the Feedback Loop page — the difference between a loop that's real and one that's merely scaffolded. (Honest scope: the re-fit reads the canonical feature set, which grows as the pipeline ingests resolved events; a raw log row lacks the engineered features to train on directly.)
 
 ---
