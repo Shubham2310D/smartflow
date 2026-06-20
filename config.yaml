@@ -62,3 +62,11 @@ resource_rules:
     - public_event
   diversion_min_severity: High
   closure_prob_barricade_threshold: 0.30   # model P(closure) ≥ this → barricade
+
+# Officer roster for the multi-event allocation optimiser.
+# ASSUMPTION: the dataset contains no staffing table or station capacity, so
+# these are illustrative figures that give the allocator a supply side to
+# optimise over. Tune them (or per-station overrides) to explore under-resourcing.
+roster:
+  default_officers_per_station: 6
+  stations: {}   # e.g. {Cubbon Park: 10, Madiwala: 4} to override individual stations
