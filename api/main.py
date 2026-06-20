@@ -35,6 +35,7 @@ from feature_engineering import (  # noqa: E402
 )
 from model_training import SEVERITY_INVERSE_MAP  # noqa: E402
 from outcomes_log import log_decision  # noqa: E402
+from history_features import history_features  # noqa: E402
 from resource_recommender import clearance_range, recommend  # noqa: E402
 from utils import is_peak_hour  # noqa: E402
 
@@ -48,12 +49,15 @@ _clo = joblib.load(_MODELS / "closure_predictor.pkl") if (_MODELS / "closure_pre
 class Event(BaseModel):
     event_cause: str = "vehicle_breakdown"
     zone: str = "Central Zone 1"
+    corridor: str = ""
     hour_of_day: int = 9
     day_of_week: int = 0
-    month: int = 6
     veh_type: str = "unknown"
-    junction_repeat_count: int = 5
-    corridor_7d_score: int = 5
+    # History features are looked up from the corridor's historical medians by
+    # default (see history_features). Pass explicit values only to override —
+    # e.g. when a real event store can supply a live count.
+    junction_repeat_count: int | None = None
+    corridor_7d_score: int | None = None
     description: str = ""
     log: bool = True
 
@@ -66,17 +70,23 @@ def health():
 @app.post("/event")
 def handle_event(ev: Event):
     sem = extract_semantic_type(ev.description)
+
+    # Backward-looking history features: look up the corridor's historical
+    # medians unless the caller supplied an explicit override. Never a constant.
+    hist = history_features(ev.corridor or None)
+    jrc = ev.junction_repeat_count if ev.junction_repeat_count is not None else hist["junction_repeat_count"]
+    c7d = ev.corridor_7d_score    if ev.corridor_7d_score    is not None else hist["corridor_7d_score"]
+
     feats = {
         "cause_severity_weight":  CAUSE_SEVERITY_WEIGHT.get(ev.event_cause, 1),
         "road_closure_binary":    0,
         "event_semantic_encoded": _SEMANTIC_MAP.get(sem, 0),
         "hour_of_day":            ev.hour_of_day,
         "day_of_week":            ev.day_of_week,
-        "month":                  ev.month,
         "is_peak_hour":           int(is_peak_hour(ev.hour_of_day)),
         "is_weekend":             int(ev.day_of_week >= 5),
-        "junction_repeat_count":  ev.junction_repeat_count,
-        "corridor_7d_score":      ev.corridor_7d_score,
+        "junction_repeat_count":  jrc,
+        "corridor_7d_score":      c7d,
         "veh_type_encoded":       _VEH_TYPE_MAP.get(ev.veh_type, len(_VEH_TYPE_ORDER) - 1),
     }
     X_clf = pd.DataFrame([feats])[_clf["features"]]
@@ -105,4 +115,12 @@ def handle_event(ev: Event):
         "road_closure_likelihood": closure_prob,
         "clearance_range": clearance_range(ev.event_cause),
         "recommendation": rec,
+        # Echo the history features actually used, so the caller can see they
+        # came from corridor history (or an override), not a fabricated constant.
+        "history_features_used": {
+            "corridor": ev.corridor or None,
+            "junction_repeat_count": jrc,
+            "corridor_7d_score": c7d,
+            "source": "override" if (ev.junction_repeat_count is not None or ev.corridor_7d_score is not None) else "corridor_history",
+        },
     }

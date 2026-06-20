@@ -23,6 +23,7 @@ from feature_engineering import (
     _VEH_TYPE_ORDER,
     extract_semantic_type,
 )
+from history_features import corridor_list, history_features
 from model_training import FEATURES, SEVERITY_COLORS, SEVERITY_INVERSE_MAP
 from resource_recommender import clearance_range
 from utils import ALL_CAUSES, ALL_ZONES, CAUSE_DISPLAY, get_nearest_station, is_peak_hour
@@ -36,7 +37,6 @@ st.set_page_config(page_title="Predict Event | SmartFlow", page_icon="🔮", lay
 _CLF_PATH = _ROOT / "models" / "severity_classifier.pkl"
 _DUR_PATH = _ROOT / "models" / "duration_predictor.pkl"
 _CLO_PATH = _ROOT / "models" / "closure_predictor.pkl"
-_FEATS_PATH = _ROOT / "data" / "processed" / "features.csv"
 
 
 @st.cache_resource(show_spinner="Loading models…")
@@ -47,20 +47,6 @@ def load_models():
     dur_pkg = joblib.load(_DUR_PATH)
     clo_pkg = joblib.load(_CLO_PATH) if _CLO_PATH.exists() else None
     return clf_pkg, dur_pkg, clo_pkg
-
-
-@st.cache_data(show_spinner=False)
-def load_feature_stats():
-    if not _FEATS_PATH.exists():
-        return {}
-    df = pd.read_csv(_FEATS_PATH)
-    stats = {}
-    for corridor, grp in df.groupby("corridor"):
-        stats[corridor] = {
-            "median_7d":  grp["corridor_7d_score"].median(),
-            "median_jrc": grp["junction_repeat_count"].median(),
-        }
-    return stats
 
 
 # ---------------------------------------------------------------------------
@@ -80,7 +66,7 @@ if clf_pkg is None:
 clf_model = clf_pkg["model"]
 dur_model = dur_pkg["model"]
 clo_model = clo_pkg["model"] if clo_pkg else None
-feat_stats = load_feature_stats()
+all_corridors = corridor_list()
 
 st.info(
     "**What each input drives:** *Cause / description / vehicle / time* feed the "
@@ -89,9 +75,6 @@ st.info(
     "the severity model. Severity is a **rules-based triage** label; road-closure "
     "likelihood is the genuinely learned, calibrated model."
 )
-
-# Known corridors for the dropdown
-all_corridors = sorted(feat_stats.keys()) if feat_stats else ["Non-corridor"]
 
 # ---------------------------------------------------------------------------
 # Input form
@@ -143,10 +126,11 @@ with st.form("predict_form"):
 # ---------------------------------------------------------------------------
 
 if submitted:
-    # Look up corridor/junction stats
-    c_stats = feat_stats.get(corridor, {})
-    corridor_7d   = int(c_stats.get("median_7d", 5))
-    junction_rpt  = int(c_stats.get("median_jrc", 5))
+    # Backward-looking history features for this corridor (historical medians,
+    # global-median fallback) — never a fabricated constant.
+    hist = history_features(corridor)
+    corridor_7d   = hist["corridor_7d_score"]
+    junction_rpt  = hist["junction_repeat_count"]
 
     is_peak   = int(is_peak_hour(hour))
     is_weekend = int(day_idx >= 5)

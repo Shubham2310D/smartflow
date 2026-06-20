@@ -98,6 +98,7 @@ smartflow/
 │   ├── hotspot_engine.py      # DBSCAN + KDE + GeoJSON (config-driven)
 │   ├── resource_recommender.py# Config-driven deployment logic
 │   ├── event_analog.py        # Case-based recommender for planned events
+│   ├── history_features.py    # Backward-looking history lookup for inference
 │   ├── outcomes_log.py        # Decision/outcome log (learning loop)
 │   └── utils.py               # Zone/station mappings, constants
 ├── dashboard/
@@ -111,7 +112,8 @@ smartflow/
 ├── api/
 │   └── main.py                # FastAPI real-time endpoint
 ├── tests/
-│   └── test_leakage.py        # Asserts history features are backward-looking
+│   ├── test_leakage.py        # Asserts history features are backward-looking
+│   └── test_history_features.py # Asserts inference uses real history, not a constant
 ├── data/
 │   ├── raw/                   # Place events.csv here
 │   └── processed/             # Auto-generated outputs
@@ -190,6 +192,7 @@ Open [http://localhost:8501](http://localhost:8501) in your browser.
 - **Chronological validation, not random** — operational forecasting must train on the past and predict the future. We split by time (earlier 80% / later 20%) instead of a random split. This is why the headline accuracy (75.1%) is lower than the conventional random CV (86.1%) — and more trustworthy.
 - **`month` dropped as a feature** — coverage is only **Nov 2023–Apr 2024 (~5 months)**, so under a chronological split the test months barely appear in training: `month` can't learn seasonality from this window and acts as a mild leak. We verified removal is neutral-to-positive — severity accuracy held (0.754 → 0.751) and the closure model's minority-class metrics *improved* (PR-AUC 0.16 → 0.17, recall 0.02 → 0.06, precision 0.20 → 0.44) — so it's gone from all three models.
 - **Leakage-free junction history** — `junction_repeat_count` counts only events that occurred *before* each event at the same junction (an expanding count), zeroed for the catch-all "unknown" junction so it can't act as a disguised time index.
+- **Inference uses real history, not a fabricated constant** — a new event has no `junction_repeat_count` / `corridor_7d_score` of its own, and these features *do* move the prediction. Earlier code fed a hardcoded `5`, so every live prediction depended on a made-up value. Both the Predict page and the API now look these up from the corridor's **historical medians** (global-median fallback for unknown corridors) via one shared `history_features` module; an explicit override is still accepted for when a real event store can supply a live count. This is a typical-rate proxy, not a live count — a true live store is on the roadmap.
 - **Peak hours are data-derived, not assumed — and the timezone was verified, not guessed.** The raw timestamps carry a `+00` tag, but their wall-clock already behaves as Bengaluru **local** time: converting to IST empties the evening rush (18–21h drops to ~8–52 events) and invents a 2 AM peak, so we read the hour as-is. And because this feed is ~60% truck breakdowns, incident volume peaks in the **freight window (evening + pre-dawn)**, *not* the textbook 08–10 / 17–20 commuter rush. So `is_peak_hour` is defined **from the data** (hours whose volume exceeds the daily mean), lives in `config.yaml`, and is shared by training, the recommender, the API and the dashboard through one helper — "peak" means the same thing everywhere. (Measured honestly: `is_peak_hour` is redundant with raw `hour_of_day` for the models — closure AUC is unchanged at 0.70 — so its real value is the recommender's peak-hour personnel bonus now firing on the actual load pattern, e.g. a 21:00 incident, instead of the wrong commuter hours.)
 - **Event-aware cause vocabulary** — `procession`, `vip_movement`, `protest`, `public_event` are kept as first-class causes rather than collapsed into "other", because planned/unplanned gatherings are exactly the event types this problem targets.
 - **Free-text mining (English + Kannada)** — the `description` field (83% populated, bilingual) is mined with a keyword pass into an `event_semantic_type` (sports event, utility work, VIP movement, …). It powers the auto-categorisation chart in Analytics and the live extraction on the Predict page. **We measured its effect honestly: it does *not* improve clearance-time MAE** (see below) — but it recovers event semantics the structured cause column misses.
