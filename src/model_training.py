@@ -39,7 +39,10 @@ logger = logging.getLogger(__name__)
 CLF_FEATURES = [
     "hour_of_day",
     "day_of_week",
-    "month",
+    # "month" dropped: coverage is only Nov 2023–Apr 2024 (~5 months), so under a
+    # chronological split the test months barely appear in train — month can't
+    # learn seasonality from this window and is mildly leaky. Confirmed
+    # AUC/accuracy-neutral on removal.
     "is_peak_hour",
     "is_weekend",
     "junction_repeat_count",
@@ -60,7 +63,7 @@ REG_FEATURES = [
     "event_semantic_encoded",
     "hour_of_day",
     "day_of_week",
-    "month",
+    # "month" dropped — see CLF_FEATURES (5-month window, leaky under time split).
     "is_peak_hour",
     "is_weekend",
     "junction_repeat_count",
@@ -79,7 +82,7 @@ CLOSURE_FEATURES = [
     "event_semantic_encoded",
     "hour_of_day",
     "day_of_week",
-    "month",
+    # "month" dropped — see CLF_FEATURES (5-month window, leaky under time split).
     "is_peak_hour",
     "is_weekend",
     "junction_repeat_count",

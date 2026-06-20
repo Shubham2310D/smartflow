@@ -26,6 +26,17 @@ Bengaluru processes thousands of road incidents every month — accidents, flood
 
 ---
 
+## Approach — two layers, scoped to what the data supports
+
+The brief spans two distinct regimes, and so does this dataset. Rather than build one model that pretends they're the same problem, SmartFlow is **explicitly two layers**:
+
+- **Layer A — Background Incident Operations** (≈92% of the data: vehicle breakdowns, potholes, water-logging). These are *reactive*: an incident is logged, then triaged and cleared. This layer does real-time triage, hotspot detection, **road-closure prediction** (the headline model — a real observed target), and resource dispatch.
+- **Layer B — Planned-Event Impact** (≈8%: `public_event`, `procession`, `vip_movement`, `protest`, plus `construction`). These have a known type, place, and time *ahead of time*, so they're handled by **case-based retrieval** — pull the most similar past events and surface what they actually required — rather than a deep learned forecaster the ~130 gathering rows can't support.
+
+This split is a deliberate scoping choice, not a limitation we're hiding: the dataset is incident-heavy, so we make the incident layer genuinely operational and answer the planned-event half with honest case-based evidence. Where the brief asks for a measured *congestion impact* (queue length, speed drop), the data contains none — see [Honest Limitations](#honest-limitations).
+
+---
+
 ## Solution
 
 SmartFlow is built on 8,057 real Bengaluru traffic incidents (Astram dataset, cleaned from 8,173 raw rows):
@@ -33,7 +44,7 @@ SmartFlow is built on 8,057 real Bengaluru traffic incidents (Astram dataset, cl
 | Module | What it does |
 |---|---|
 | **Data Pipeline** | Cleans raw Astram CSV — null handling, tz-aware datetime parsing (wall-clock treated as Bengaluru local — see Design Decisions), event-aware cause vocabulary (procession / VIP / protest kept as first-class causes) |
-| **ML Models** | **Road-closure predictor** (calibrated, ROC-AUC 0.70 on a *real observed* target) + severity triage classifier (75.5% chronological holdout vs 63% baseline) |
+| **ML Models** | **Road-closure predictor** (calibrated, ROC-AUC ≈0.70 on a *real observed* target) + severity triage classifier (75.1% chronological holdout vs 63.2% baseline) |
 | **Free-text Mining** | Bilingual (English + Kannada) keyword pass over `description` → event semantic type (sports event, utility work, VIP movement, …) |
 | **Hotspot Engine** | DBSCAN spatial clustering (219 clusters, config-driven 200 m radius) + KDE density heatmap |
 | **Resource Recommender** | Config-driven scoring → personnel, barricade, diversion, dispatch station + empirical clearance range |
@@ -48,10 +59,10 @@ SmartFlow is built on 8,057 real Bengaluru traffic incidents (Astram dataset, cl
 | Metric | Value |
 |---|---|
 | Events processed | 8,057 (from 8,173 raw) |
-| **Road-closure model ROC-AUC** (real observed target, calibrated) | **0.70** vs 7.4% base rate |
-| Severity triage accuracy (chronological holdout) | 75.5% — vs 63% majority baseline |
-| Severity triage accuracy (random 5-fold CV) | 86.0% (optimistic — ignores time order) |
-| Clearance predictor vs median baseline | ~106 min — **no lift over the median** (reported honestly) |
+| **Road-closure model ROC-AUC** (real observed target, calibrated) | **0.695** (PR-AUC 0.17, recall 0.06 / precision 0.44 @0.5) vs 7.4% base rate |
+| Severity triage accuracy (chronological holdout) | 75.1% — vs 63.2% majority baseline |
+| Severity triage accuracy (random 5-fold CV) | 86.1% (optimistic — ignores time order) |
+| Clearance predictor vs median baseline | 106.9 min — **no lift over the median** (reported honestly) |
 | Median incident clearance | 57 min |
 | Hotspot clusters found | 219 |
 | Top hotspot | Sankey Road — 764 events |
@@ -176,7 +187,8 @@ Open [http://localhost:8501](http://localhost:8501) in your browser.
 - **The real model predicts a real target: road closure.** `requires_road_closure` is *observed* (not a derived label) and is exactly what drives barricading/diversion — so it is genuinely learnable and operationally meaningful. We predict it with a class-weighted, **isotonic-calibrated** XGBoost on a chronological split. At a 7.4% base rate, accuracy is meaningless, so we report **ROC-AUC 0.70 / PR-AUC** and present the calibrated probability against the base rate. This is the headline model, replacing the synthetic-label classifier as the thing to trust.
 - **Severity is a triage classifier, not a congestion-impact predictor** — its label is rules-derived (priority + closure + cause) and real-world impact (queue length, delay) is never measured in this data. So it is framed as *triage*. The honest result still stands: **75.5% on a chronological holdout vs a 63% baseline** from spatial-temporal context alone.
 - **Contextual-only severity features (no leakage, no text)** — cause/closure are excluded because the label is derived from them; the text-derived `event_semantic_type` is *also* excluded from the classifier because it is a cause-proxy that would re-introduce the same circularity. It is used only by the duration model, where cause-like features are legitimate.
-- **Chronological validation, not random** — operational forecasting must train on the past and predict the future. We split by time (earlier 80% / later 20%) instead of a random split. This is why the headline accuracy (75.5%) is lower than the conventional random CV (86%) — and more trustworthy.
+- **Chronological validation, not random** — operational forecasting must train on the past and predict the future. We split by time (earlier 80% / later 20%) instead of a random split. This is why the headline accuracy (75.1%) is lower than the conventional random CV (86.1%) — and more trustworthy.
+- **`month` dropped as a feature** — coverage is only **Nov 2023–Apr 2024 (~5 months)**, so under a chronological split the test months barely appear in training: `month` can't learn seasonality from this window and acts as a mild leak. We verified removal is neutral-to-positive — severity accuracy held (0.754 → 0.751) and the closure model's minority-class metrics *improved* (PR-AUC 0.16 → 0.17, recall 0.02 → 0.06, precision 0.20 → 0.44) — so it's gone from all three models.
 - **Leakage-free junction history** — `junction_repeat_count` counts only events that occurred *before* each event at the same junction (an expanding count), zeroed for the catch-all "unknown" junction so it can't act as a disguised time index.
 - **Peak hours are data-derived, not assumed — and the timezone was verified, not guessed.** The raw timestamps carry a `+00` tag, but their wall-clock already behaves as Bengaluru **local** time: converting to IST empties the evening rush (18–21h drops to ~8–52 events) and invents a 2 AM peak, so we read the hour as-is. And because this feed is ~60% truck breakdowns, incident volume peaks in the **freight window (evening + pre-dawn)**, *not* the textbook 08–10 / 17–20 commuter rush. So `is_peak_hour` is defined **from the data** (hours whose volume exceeds the daily mean), lives in `config.yaml`, and is shared by training, the recommender, the API and the dashboard through one helper — "peak" means the same thing everywhere. (Measured honestly: `is_peak_hour` is redundant with raw `hour_of_day` for the models — closure AUC is unchanged at 0.70 — so its real value is the recommender's peak-hour personnel bonus now firing on the actual load pattern, e.g. a 21:00 incident, instead of the wrong commuter hours.)
 - **Event-aware cause vocabulary** — `procession`, `vip_movement`, `protest`, `public_event` are kept as first-class causes rather than collapsed into "other", because planned/unplanned gatherings are exactly the event types this problem targets.
