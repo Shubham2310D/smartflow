@@ -8,7 +8,7 @@ New columns produced
   hour_of_day            : int    — 0–23
   day_of_week            : int    — 0=Monday … 6=Sunday
   month                  : int    — 1–12
-  is_peak_hour           : int    — 1 if 08-10 or 17-20, else 0
+  is_peak_hour           : int    — 1 if in the data-derived peak window (config)
   is_weekend             : int    — 1 if Saturday / Sunday
   junction_repeat_count  : int    — global event count at this junction
   corridor_7d_score      : int    — events on same corridor in prior 7 days
@@ -23,6 +23,8 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+from utils import peak_hours
 
 logger = logging.getLogger(__name__)
 
@@ -181,13 +183,23 @@ def compute_severity_class(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def temporal_features(df: pd.DataFrame) -> pd.DataFrame:
-    dt = df["start_datetime"].dt
+    # start_datetime is parsed as UTC-aware (it carries a "+00" tag), but the
+    # stored wall-clock already behaves as Bengaluru LOCAL time: the hourly
+    # incident distribution peaks in the evening + pre-dawn and goes dead at
+    # midday, and tz_convert("Asia/Kolkata") would empty the evening rush
+    # (18-21h -> ~8-52 events) and invent a 2 AM peak. So we read the wall-clock
+    # as-is. tz_localize(None) just drops the misleading tag so .dt.hour is
+    # unambiguous and no downstream contributor is tempted to "fix" it by
+    # converting. (corridor_7d_score does its own tz-invariant delta math.)
+    dt = df["start_datetime"].dt.tz_localize(None).dt
     df["hour_of_day"] = dt.hour
     df["day_of_week"] = dt.dayofweek          # 0=Monday
     df["month"] = dt.month
 
-    peak_hours = set(range(8, 11)) | set(range(17, 21))   # 08-10, 17-20
-    df["is_peak_hour"] = df["hour_of_day"].isin(peak_hours).astype(int)
+    # Peak = data-derived high-incident-load window (config single source of
+    # truth, shared with the recommender/API/dashboard), NOT commuter rush.
+    peak = peak_hours()
+    df["is_peak_hour"] = df["hour_of_day"].isin(peak).astype(int)
     df["is_weekend"] = (df["day_of_week"] >= 5).astype(int)
     return df
 

@@ -33,6 +33,14 @@ resource_rules:
     Low: 2
     Medium: 3
     High: 5
+  # High-incident-load hours, DERIVED from the data, not assumed commuter rush.
+  # The raw start_datetime carries a "+00" tag but its wall-clock already behaves
+  # as Bengaluru local time (converting to IST empties the evening rush and
+  # invents a 2 AM peak — see temporal_features). This feed is ~60% truck
+  # breakdowns; incident volume peaks in the freight window (evening + pre-dawn),
+  # NOT the 08-10/17-20 commuter rush. These are the hours whose hourly count
+  # exceeds the daily mean (~336/hr). Re-derive if the data changes.
+  peak_hours: [0, 1, 2, 3, 4, 5, 6, 7, 19, 20, 21, 22, 23]
   peak_hour_bonus: 1
   road_closure_bonus: 1
   high_risk_cause_bonus: 1

@@ -25,7 +25,7 @@ from feature_engineering import (
 )
 from model_training import FEATURES, SEVERITY_COLORS, SEVERITY_INVERSE_MAP
 from resource_recommender import clearance_range
-from utils import ALL_CAUSES, ALL_ZONES, CAUSE_DISPLAY, get_nearest_station
+from utils import ALL_CAUSES, ALL_ZONES, CAUSE_DISPLAY, get_nearest_station, is_peak_hour
 
 st.set_page_config(page_title="Predict Event | SmartFlow", page_icon="🔮", layout="wide")
 
@@ -148,7 +148,7 @@ if submitted:
     corridor_7d   = int(c_stats.get("median_7d", 5))
     junction_rpt  = int(c_stats.get("median_jrc", 5))
 
-    is_peak   = int(hour in range(8, 11) or hour in range(17, 21))
+    is_peak   = int(is_peak_hour(hour))
     is_weekend = int(day_idx >= 5)
 
     # Mine the free-text description for an event semantic type (bilingual).

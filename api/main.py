@@ -36,6 +36,7 @@ from feature_engineering import (  # noqa: E402
 from model_training import SEVERITY_INVERSE_MAP  # noqa: E402
 from outcomes_log import log_decision  # noqa: E402
 from resource_recommender import clearance_range, recommend  # noqa: E402
+from utils import is_peak_hour  # noqa: E402
 
 app = FastAPI(title="SmartFlow API", version="1.0")
 
@@ -72,7 +73,7 @@ def handle_event(ev: Event):
         "hour_of_day":            ev.hour_of_day,
         "day_of_week":            ev.day_of_week,
         "month":                  ev.month,
-        "is_peak_hour":           int(ev.hour_of_day in range(8, 11) or ev.hour_of_day in range(17, 21)),
+        "is_peak_hour":           int(is_peak_hour(ev.hour_of_day)),
         "is_weekend":             int(ev.day_of_week >= 5),
         "junction_repeat_count":  ev.junction_repeat_count,
         "corridor_7d_score":      ev.corridor_7d_score,

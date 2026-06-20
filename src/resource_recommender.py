@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from utils import get_nearest_station, load_config
+from utils import get_nearest_station, is_peak_hour, load_config
 
 # ---------------------------------------------------------------------------
 # Rules — loaded from config.yaml (single source of truth), with fallbacks.
@@ -129,7 +129,7 @@ def recommend(
     sev    = severity_class if severity_class in base_personnel else "Low"
     cause  = event_cause if event_cause else "other"
     closure = bool(requires_road_closure)
-    is_peak = _is_peak_hour(hour_of_day)
+    is_peak = is_peak_hour(hour_of_day)
     closure_prob = float(closure_probability) if closure_probability is not None else None
     closure_likely = closure_prob is not None and \
         closure_prob >= rules["closure_prob_barricade_threshold"]
@@ -183,10 +183,6 @@ def recommend(
         "is_peak_hour":                is_peak,
         "rationale":                   "; ".join(rationale_parts),
     }
-
-
-def _is_peak_hour(hour: int) -> bool:
-    return hour in range(8, 11) or hour in range(17, 21)
 
 
 # ---------------------------------------------------------------------------

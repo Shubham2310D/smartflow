@@ -20,7 +20,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from utils import CAUSE_DISPLAY
+from utils import CAUSE_DISPLAY, is_peak_hour
 
 st.set_page_config(page_title="Analytics | SmartFlow", page_icon="📊", layout="wide")
 
@@ -119,7 +119,7 @@ with col2:
     st.subheader("Events by Hour of Day")
     hourly = fdf.groupby("hour_of_day").size().reset_index(name="Events")
     hourly["Peak"] = hourly["hour_of_day"].apply(
-        lambda h: "Peak" if h in range(8, 11) or h in range(17, 21) else "Off-peak"
+        lambda h: "Peak" if is_peak_hour(h) else "Off-peak"
     )
     fig2 = px.bar(
         hourly, x="hour_of_day", y="Events",
