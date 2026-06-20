@@ -21,11 +21,9 @@ COPY . .
 ENV PORT=8501
 EXPOSE 8501
 
-# Streamlit's own health endpoint — no curl needed in the slim image. Reads $PORT
-# so the check matches whatever port the platform assigned.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD python -c "import os,urllib.request,sys; p=os.environ.get('PORT','8501'); sys.exit(0 if urllib.request.urlopen(f'http://localhost:{p}/_stcore/health').status==200 else 1)"
-
+# Health is checked by the platform over HTTP at /_stcore/health (Render's health
+# check path), so no Docker-level HEALTHCHECK is needed.
+#
 # Shell form so ${PORT} expands. Bind 0.0.0.0:$PORT; CORS/XSRF off so Streamlit's
 # websocket connects through a cloud reverse proxy.
 CMD streamlit run dashboard/app.py \
