@@ -19,8 +19,16 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-# The planned / gathering event types this module is meant for
+# The planned / gathering event types this module is meant for (crowds).
 PLANNED_CAUSES = ["procession", "vip_movement", "protest", "public_event"]
+
+# Construction is plannable too, but it is a *sustained obstruction* with no
+# crowd — different operationally (no crowd-control personnel, longer footprint),
+# so it is kept as its own sub-case rather than folded in with gatherings.
+PLANNED_OBSTRUCTIONS = ["construction"]
+
+# Everything the event planner can forecast ahead of time.
+PLANNABLE_EVENTS = PLANNED_CAUSES + PLANNED_OBSTRUCTIONS
 
 _feats_cache: pd.DataFrame | None = None
 
@@ -48,6 +56,20 @@ def _haversine_km(lat1, lon1, lat2, lon2):
     return 2 * r * np.arcsin(np.sqrt(a))
 
 
+_MIN_LOCAL = 3   # below this, a locality estimate is too noisy — back off
+
+
+def _confidence(found: int, local: bool) -> str:
+    """Confidence in the estimate from how many analogs matched and how local."""
+    if found == 0:
+        return "none"
+    if found >= 8 and local:
+        return "high"
+    if found >= 8 or (found >= 3 and local):
+        return "medium"
+    return "low"
+
+
 def find_analogs(
     cause: str,
     zone: str | None = None,
@@ -57,46 +79,60 @@ def find_analogs(
     project_root: Path | None = None,
 ) -> dict:
     """
-    Retrieve the k most similar past events of `cause` and summarise outcomes.
+    Retrieve the most similar past events and summarise outcomes, with graceful
+    backoff and an explicit confidence so a thin match reads as "low confidence"
+    rather than a confident answer built on one data point.
 
-    Locality preference: by coordinates if given (nearest k), else by zone, else
-    citywide for that cause.  Returns medians/rates plus a small sample table.
+    Backoff tiers (most → least specific):
+      1. nearby            — same cause, nearest by coordinates (if lat/lon given)
+      2. type_in_zone      — same cause, same zone (needs >= _MIN_LOCAL)
+      3. type_citywide     — same cause, anywhere
+      4. similar_citywide  — any planned event (only if this cause is near-absent)
     """
     df = _load_features(project_root)
     all_cause = df[df["event_cause"] == cause].copy()
-    scope = "citywide"
-    pool = all_cause
 
-    _MIN_LOCAL = 3   # below this, a locality estimate is too noisy — go citywide
-
+    local = False
     if lat is not None and lon is not None and len(all_cause):
         located = all_cause.dropna(subset=["latitude", "longitude"]).copy()
         located["distance_km"] = _haversine_km(lat, lon, located["latitude"], located["longitude"])
         pool = located.sort_values("distance_km").head(k)
-        scope = "nearest by location"
+        tier, scope, local = "nearby", "nearest by location", True
     elif zone and (all_cause["zone"] == zone).sum() >= _MIN_LOCAL:
         pool = all_cause[all_cause["zone"] == zone].head(k)
-        scope = f"in {zone}"
-    else:
-        # Too few in this zone for a stable estimate → use all events of this type.
+        tier, scope, local = "type_in_zone", f"in {zone}", True
+    elif len(all_cause) >= _MIN_LOCAL:
         pool = all_cause.head(max(k, 25))
+        tier = "type_citywide"
         scope = "citywide (too few local)" if zone else "citywide"
+    else:
+        # This cause is near-absent — fall back to the broader planned-event pool
+        # so the planner still has *some* grounded evidence, flagged as such.
+        pool = df[df["event_cause"].isin(PLANNABLE_EVENTS)].head(max(k, 25))
+        tier, scope = "similar_citywide", "all planned events (this type is rare)"
 
     if pool.empty:
-        return {"found": 0, "cause": cause, "scope": scope}
+        return {"found": 0, "cause": cause, "scope": scope, "tier": "none",
+                "confidence": "none", "expected_severity": None}
 
+    found = int(len(pool))
     dur = pool["duration_minutes"].dropna()
+    sev = pool["severity_class"].dropna() if "severity_class" in pool else pd.Series(dtype=str)
     return {
-        "found":            int(len(pool)),
+        "found":            found,
         "cause":            cause,
         "scope":            scope,
+        "tier":             tier,
+        "confidence":       _confidence(found, local),
+        "expected_severity": str(sev.mode().iloc[0]) if len(sev) else "Medium",
         "median_clearance": round(float(dur.median()), 0) if len(dur) else None,
         "p25_clearance":    round(float(dur.quantile(0.25)), 0) if len(dur) else None,
         "p75_clearance":    round(float(dur.quantile(0.75)), 0) if len(dur) else None,
         "closure_rate":     round(float(pool["road_closure_binary"].mean()) * 100, 0)
                             if "road_closure_binary" in pool else None,
         "samples":          pool[[
-            c for c in ["start_datetime", "address", "zone", "duration_minutes",
-                        "road_closure_binary", "distance_km"] if c in pool.columns
+            c for c in ["start_datetime", "address", "zone", "severity_class",
+                        "duration_minutes", "road_closure_binary", "distance_km"]
+            if c in pool.columns
         ]].head(8),
     }

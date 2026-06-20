@@ -18,6 +18,10 @@
 |---|---|
 | ![Analytics](snapshots/analytics.png) | ![Roster Optimizer](snapshots/roster_optimizer.png) |
 
+| Event Planner |
+|---|
+| ![Event Planner](snapshots/event_planner.png) |
+
 ---
 
 ## Problem
@@ -49,7 +53,8 @@ SmartFlow is built on 8,057 real Bengaluru traffic incidents (Astram dataset, cl
 | **Hotspot Engine** | DBSCAN spatial clustering (219 clusters, config-driven 200 m radius) + KDE density heatmap |
 | **Resource Recommender** | Config-driven scoring → personnel, barricade, diversion, dispatch station + empirical clearance range |
 | **Roster Optimizer** | Min-cost-flow allocation of a fixed officer roster across simultaneous events — high-priority first, travel minimised (the *optimal* in "optimal deployment") |
-| **Case-Based Forecast** | For planned events (procession / VIP / protest / public event), retrieves similar past events and what they actually required |
+| **Event Planner** | Advance what-if for a known upcoming event (type + place + date/time) → impact forecast + full deployment plan, grounded in similar past events with a confidence rating |
+| **Case-Based Forecast** | Retrieves similar past events (graceful backoff: nearby → type-in-zone → type-citywide → similar) and what they actually required, with a confidence tier |
 | **Feedback Loop** | Logs each decision and tracks predicted-vs-actual — the basis for periodic retraining |
 | **Real-time API** | `POST /event` (FastAPI) runs the same predict → recommend → log path for streaming use |
 
@@ -86,6 +91,7 @@ SmartFlow is built on 8,057 real Bengaluru traffic incidents (Astram dataset, cl
 5. **Analytics** — 7 Plotly charts (incl. free-text event type)
 6. **Feedback Loop** — Predicted-vs-actual backtest (with median baseline) + live operator decision log
 7. **Roster Optimizer** — Multi-event conflict view: allocate a fixed officer roster across simultaneously-active events (min-cost flow), with under-resourced events flagged
+8. **Event Planner** — Advance what-if simulator: pick an upcoming event's type, place and date/time → full deployment plan + impact forecast + analog evidence, in one pane
 
 ---
 
@@ -100,7 +106,8 @@ smartflow/
 │   ├── hotspot_engine.py      # DBSCAN + KDE + GeoJSON (config-driven)
 │   ├── resource_recommender.py# Config-driven per-event deployment logic
 │   ├── roster_optimizer.py    # Min-cost-flow allocation across concurrent events
-│   ├── event_analog.py        # Case-based recommender for planned events
+│   ├── event_analog.py        # Case-based retrieval (backoff + confidence)
+│   ├── event_planner.py       # Advance plan for an upcoming event (impact + deployment)
 │   ├── history_features.py    # Backward-looking history lookup for inference
 │   ├── outcomes_log.py        # Decision/outcome log (learning loop)
 │   └── utils.py               # Zone/station mappings, constants
@@ -112,13 +119,15 @@ smartflow/
 │       ├── 3_Resource_Plan.py
 │       ├── 4_Analytics.py
 │       ├── 5_Feedback_Loop.py
-│       └── 6_Roster_Optimizer.py
+│       ├── 6_Roster_Optimizer.py
+│       └── 7_Event_Planner.py
 ├── api/
 │   └── main.py                # FastAPI real-time endpoint
 ├── tests/
 │   ├── test_leakage.py        # Asserts history features are backward-looking
 │   ├── test_history_features.py # Asserts inference uses real history, not a constant
-│   └── test_roster_optimizer.py # Asserts allocation conserves demand & triages by priority
+│   ├── test_roster_optimizer.py # Asserts allocation conserves demand & triages by priority
+│   └── test_event_planner.py  # Asserts confidence backoff & obstruction handling
 ├── data/
 │   ├── raw/                   # Place events.csv here
 │   └── processed/             # Auto-generated outputs
@@ -202,7 +211,8 @@ Open [http://localhost:8501](http://localhost:8501) in your browser.
 - **Event-aware cause vocabulary** — `procession`, `vip_movement`, `protest`, `public_event` are kept as first-class causes rather than collapsed into "other", because planned/unplanned gatherings are exactly the event types this problem targets.
 - **Free-text mining (English + Kannada)** — the `description` field (83% populated, bilingual) is mined with a keyword pass into an `event_semantic_type` (sports event, utility work, VIP movement, …). It powers the auto-categorisation chart in Analytics and the live extraction on the Predict page. **We measured its effect honestly: it does *not* improve clearance-time MAE** (see below) — but it recovers event semantics the structured cause column misses.
 - **The clearance regressor is reported against its baseline** — on the chronological holdout the XGBoost MAE (~106 min) is **statistically indistinguishable from "always predict the median" (~106 min)**. Clearance time here is dominated by unobserved operational factors (crew dispatch, on-scene complexity), so we present the estimate as a rough prior, show the baseline beside it on the Feedback Loop page, and have the Resource Plan fall back to cause-based medians. We'd rather show this than dress up a constant as a model.
-- **Planned events get a case-based forecast, not a model** — processions, VIP movement, protests and public events have a known type and place ahead of time. The Resource Plan retrieves the most similar past events of that type and shows what they actually required (median clearance, closure rate). This directly answers the "recommend manpower for an upcoming event" half of the brief without inventing a model the data can't support.
+- **Planned events get a case-based forecast, not a model** — processions, VIP movement, protests and public events have a known type and place ahead of time. The **Event Planner** page turns that into a single advance what-if: pick type + place + date/time and get the impact forecast (expected severity, road-closure likelihood, clearance range) *and* the deployment plan (personnel, barricade, diversion, dispatch) in one pane, before the event. It directly answers the "recommend manpower for an upcoming event" half of the brief without inventing a model the ~130 gathering rows can't support.
+- **Retrieval backs off gracefully and rates its own confidence** — a query keys on *type-and-place*, but ~15 protests citywide means an exact local match can return nothing. So retrieval degrades **nearby → type-in-zone → type-citywide → similar-events**, surfaces how many analogs it found, and labels the result **high / medium / low confidence** so a thin match reads as a rough prior, not a confident answer on one data point. **Construction is handled as its own sub-case** — a sustained obstruction, not a crowd — so it doesn't inherit crowd-control personnel logic.
 - **"Optimal" deployment is an actual optimisation, not a scoring table** — the per-event recommender says how many officers *one* event needs; it can't resolve the real constraint, which is scarce officers across *simultaneous* events. The Roster Optimizer models that as a **min-cost flow**: a fixed roster (station capacities) flows to events at a cost of travel distance, with a severity-weighted penalty path for unmet demand. The result minimises travel while serving high-priority events first, and leaves the lowest-priority demand short when the roster can't cover everything — a genuine "optimal given the constraints" plan. Two inputs are assumed and labelled as such (roster capacity and the concurrency scenario — see Limitations); everything else (demand, travel, allocation) is real.
 - **Config is the single source of truth** — `config.yaml` is read by the hotspot engine (DBSCAN eps, min samples, KDE bandwidth, cluster radius) and the resource recommender (personnel, bonuses, barricade causes, closure threshold, **data-derived peak hours**). It is no longer decorative; change the file and behaviour changes.
 - **Honest cluster footprints** — clusters render as fixed-radius circles around the centroid, not convex hulls. Hulls over road-aligned incidents produce giant triangles that overstate the affected area.
