@@ -19,8 +19,9 @@ from feature_engineering import corridor_7d_score, junction_repeat_count
 def test_junction_repeat_count_counts_only_prior_events():
     df = pd.DataFrame({
         "junction": ["MG Road", "MG Road", "MG Road", "BTM"],
+        # naive local timestamps — the contract after ingestion normalisation
         "start_datetime": pd.to_datetime(
-            ["2024-01-01", "2024-01-02", "2024-01-03", "2024-01-05"], utc=True),
+            ["2024-01-01", "2024-01-02", "2024-01-03", "2024-01-05"]),
     })
     out = junction_repeat_count(df.copy())
     # MG Road events in time order see 0, then 1, then 2 prior events.
@@ -35,7 +36,7 @@ def test_junction_repeat_count_zeros_unknown_bucket():
     df = pd.DataFrame({
         "junction": ["unknown", "unknown", "unknown"],
         "start_datetime": pd.to_datetime(
-            ["2024-01-01", "2024-01-02", "2024-01-03"], utc=True),
+            ["2024-01-01", "2024-01-02", "2024-01-03"]),
     })
     out = junction_repeat_count(df.copy())
     # "unknown" is a catch-all, never a chronic-hotspot signal → always 0.
@@ -46,7 +47,7 @@ def test_corridor_7d_score_is_backward_looking_and_windowed():
     df = pd.DataFrame({
         "corridor": ["ORR", "ORR", "ORR", "ORR"],
         "start_datetime": pd.to_datetime(
-            ["2024-01-01", "2024-01-03", "2024-01-06", "2024-01-20"], utc=True),
+            ["2024-01-01", "2024-01-03", "2024-01-06", "2024-01-20"]),
     })
     out = corridor_7d_score(df.sort_values("start_datetime").reset_index(drop=True))
     out = out.sort_values("start_datetime").reset_index(drop=True)

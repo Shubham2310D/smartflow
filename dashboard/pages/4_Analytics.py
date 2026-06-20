@@ -118,13 +118,13 @@ with col1:
 with col2:
     st.subheader("Events by Hour of Day")
     hourly = fdf.groupby("hour_of_day").size().reset_index(name="Events")
-    hourly["Peak"] = hourly["hour_of_day"].apply(
-        lambda h: "Peak" if is_peak_hour(h) else "Off-peak"
+    hourly["Load"] = hourly["hour_of_day"].apply(
+        lambda h: "High-incident" if is_peak_hour(h) else "Off-peak"
     )
     fig2 = px.bar(
         hourly, x="hour_of_day", y="Events",
-        color="Peak",
-        color_discrete_map={"Peak": "#dc3545", "Off-peak": "#6ea8fe"},
+        color="Load",
+        color_discrete_map={"High-incident": "#dc3545", "Off-peak": "#6ea8fe"},
         labels={"hour_of_day": "Hour", "Events": "Event Count"},
     )
     fig2.update_layout(height=350, margin=dict(t=10, b=10), showlegend=True)

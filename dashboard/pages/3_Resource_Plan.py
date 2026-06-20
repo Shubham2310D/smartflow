@@ -235,7 +235,7 @@ with d2:
     _info_box("Event Cause", CAUSE_DISPLAY.get(cause_key, cause_key))
 
 with d3:
-    _info_box("Peak Hour", "Yes" if rec["is_peak_hour"] else "No")
+    _info_box("High-Incident Window", "Yes" if rec["is_peak_hour"] else "No")
 
 # Rationale
 st.divider()
@@ -256,7 +256,7 @@ with st.expander("Scoring Breakdown"):
 
     import pandas as pd
     breakdown = pd.DataFrame({
-        "Factor":     ["Base personnel", "Peak hour bonus", "Road closure bonus", "High-risk cause bonus", "TOTAL"],
+        "Factor":     ["Base personnel", "High-incident window bonus", "Road closure bonus", "High-risk cause bonus", "TOTAL"],
         "Points":     [base, peak_bonus, closure_bonus, cause_bonus, base + peak_bonus + closure_bonus + cause_bonus],
     })
     st.table(breakdown)

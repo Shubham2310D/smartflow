@@ -183,15 +183,10 @@ def compute_severity_class(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def temporal_features(df: pd.DataFrame) -> pd.DataFrame:
-    # start_datetime is parsed as UTC-aware (it carries a "+00" tag), but the
-    # stored wall-clock already behaves as Bengaluru LOCAL time: the hourly
-    # incident distribution peaks in the evening + pre-dawn and goes dead at
-    # midday, and tz_convert("Asia/Kolkata") would empty the evening rush
-    # (18-21h -> ~8-52 events) and invent a 2 AM peak. So we read the wall-clock
-    # as-is. tz_localize(None) just drops the misleading tag so .dt.hour is
-    # unambiguous and no downstream contributor is tempted to "fix" it by
-    # converting. (corridor_7d_score does its own tz-invariant delta math.)
-    dt = df["start_datetime"].dt.tz_localize(None).dt
+    # start_datetime is already naive Bengaluru-local time (normalised once at
+    # ingestion in data_pipeline._parse_datetimes — the "+00" tag was never truly
+    # UTC), so we read the wall-clock directly. No per-consumer tz handling.
+    dt = df["start_datetime"].dt
     df["hour_of_day"] = dt.hour
     df["day_of_week"] = dt.dayofweek          # 0=Monday
     df["month"] = dt.month
@@ -238,9 +233,9 @@ def corridor_7d_score(df: pd.DataFrame) -> pd.DataFrame:
     """
     df = df.sort_values("start_datetime").reset_index(drop=True)
 
-    # Convert timezone-aware datetimes to int64 nanoseconds for arithmetic
-    ts_naive = df["start_datetime"].dt.tz_convert("UTC").dt.tz_localize(None)
-    ts_ns: np.ndarray = ts_naive.astype("int64").values
+    # start_datetime is naive local (normalised at ingestion); convert to int64
+    # nanoseconds for arithmetic. Deltas are tz-invariant either way.
+    ts_ns: np.ndarray = df["start_datetime"].astype("int64").values
 
     seven_days_ns = int(7 * 24 * 3600 * 1e9)
     scores = np.zeros(len(df), dtype=np.int32)

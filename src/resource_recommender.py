@@ -161,7 +161,7 @@ def recommend(
     # ---------- Human-readable rationale ----------
     rationale_parts = [f"{sev} severity event"]
     if is_peak:
-        rationale_parts.append("peak-hour traffic")
+        rationale_parts.append("high-incident window")
     if closure:
         rationale_parts.append("operator flagged road closure")
     elif closure_likely:

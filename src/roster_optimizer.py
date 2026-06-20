@@ -92,7 +92,7 @@ def build_scenario(df: pd.DataFrame, when: pd.Timestamp | None = None,
     if status and "status" in pool.columns:
         pool = pool[pool["status"] == status]
     pool = pool.dropna(subset=["latitude", "longitude", "start_datetime"])
-    hour = pool["start_datetime"].dt.tz_localize(None).dt.floor("h")
+    hour = pool["start_datetime"].dt.floor("h")   # already naive local (ingestion-normalised)
     pool = pool.assign(_hour=hour)
 
     if when is None:

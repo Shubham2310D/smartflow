@@ -114,9 +114,15 @@ def _fix_zero_coords(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _parse_datetimes(df: pd.DataFrame) -> pd.DataFrame:
+    # The raw timestamps carry a "+00" tag, but their wall-clock already behaves
+    # as Bengaluru LOCAL time (converting to IST empties the evening peak and
+    # invents a 2 AM one — verified empirically). So we parse with utc=True to
+    # interpret the tag, then strip it to NAIVE LOCAL here, ONCE, at ingestion.
+    # Every downstream consumer then works in plain local time with no tz juggling
+    # — and nobody is tempted to "correct" a UTC tag that was never truly UTC.
     for col in _DATETIME_COLS:
         if col in df.columns:
-            df[col] = pd.to_datetime(df[col], utc=True, errors="coerce")
+            df[col] = pd.to_datetime(df[col], utc=True, errors="coerce").dt.tz_localize(None)
     return df
 
 

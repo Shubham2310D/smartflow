@@ -49,7 +49,7 @@ def load_features():
 @st.cache_data(show_spinner=False)
 def busiest_windows(_df, n=15):
     pool = _df[_df["status"] == "active"].dropna(subset=["latitude", "longitude", "start_datetime"])
-    h = pool["start_datetime"].dt.tz_localize(None).dt.floor("h")
+    h = pool["start_datetime"].dt.floor("h")   # already naive local (ingestion-normalised)
     vc = h.value_counts().head(n)
     return [(ts, int(c)) for ts, c in vc.items()]
 
