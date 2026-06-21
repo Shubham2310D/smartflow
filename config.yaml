@@ -89,3 +89,12 @@ external:
     # CSV of known upcoming planned events (stadium fixtures, permits, rallies).
     # Populate data/external/event_calendar.csv from the template the module writes.
     path: data/external/event_calendar.csv
+
+# Officer push alerts (see src/notifications.py). Telegram, opt-in, OFF by default.
+# SECURITY: do NOT paste your bot token here — config.yaml is committed. Set the
+# credentials as ENVIRONMENT VARIABLES instead (TELEGRAM_BOT_TOKEN /
+# TELEGRAM_CHAT_ID), e.g. on Render → Environment. These keys are read only as a
+# local-dev fallback and must stay blank in the repo.
+notifications:
+  telegram_bot_token: ""
+  telegram_chat_id: ""

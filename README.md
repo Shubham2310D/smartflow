@@ -121,6 +121,7 @@ smartflow/
 │   ├── event_planner.py       # Advance plan for an upcoming event (impact + deployment)
 │   ├── impact_score.py        # Transparent disruption-impact heuristic (road-aware)
 │   ├── external_feeds.py      # Speed-feed + event-calendar scaffolds (roadmap joins)
+│   ├── notifications.py       # Telegram officer push alerts (opt-in, off by default)
 │   ├── event_store.py         # SQLite real-time event store (live history + active set)
 │   ├── history_features.py    # Backward-looking history lookup for inference
 │   ├── outcomes_log.py        # Decision/outcome log (append-only CSV)
@@ -151,7 +152,8 @@ smartflow/
 │   ├── test_event_store.py    # Asserts live history & active-set from the store
 │   ├── test_model_performance.py # Asserts the shipped models clear a quality floor
 │   ├── test_diversion.py      # Asserts the reroute is feasible & degrades gracefully
-│   └── test_external_feeds.py # Asserts the roadmap scaffolds work (calendar + validation)
+│   ├── test_external_feeds.py # Asserts the roadmap scaffolds work (calendar + validation)
+│   └── test_notifications.py  # Asserts officer alerts no-op safely + format correctly
 ├── data/
 │   ├── raw/                   # Place events.csv here
 │   └── processed/             # Auto-generated outputs
@@ -222,7 +224,7 @@ docker run -p 8501:8501 smartflow      # → http://localhost:8501
 ### Tests & CI
 
 ```bash
-pytest tests/        # 41 tests: leakage, history, optimizer, planner, learning loop, versioning, impact, ingest, event store, model-performance floor, diversion, external feeds
+pytest tests/        # 46 tests: leakage, history, optimizer, planner, learning loop, versioning, impact, ingest, event store, model-performance floor, diversion, external feeds, notifications
 ```
 
 [GitHub Actions](.github/workflows/ci.yml) runs the test suite **and** a Docker image build on every push / PR.
@@ -258,6 +260,7 @@ pytest tests/        # 41 tests: leakage, history, optimizer, planner, learning 
 - **Diversion is now routed, not just flagged.** `diversion.py` builds a road graph from the cached OSM network (networkx), models the closure as a zone around the incident, finds the road's two opposite exits, and runs Dijkstra around the closure — a **real detour with an added-distance cost** (e.g. ORR @ Marathahalli: a 2.5 km reroute). Surfaced on-map in Live Ops and returned by the API when a location is given. The boolean rule still decides *whether* to divert; this answers *how*.
 - **Impact is a transparent heuristic, now grounded in measured road capacity.** The data has no measured congestion outcome (queue/speed/delay), so "impact" still can't be fully learned — but the heuristic composite now adds a **road-capacity term from the OSM class + lane count** (closure × corridor-pressure × **road-capacity** × high-incident-window), so a closure on an arterial scores above one on a lane. Every weight is visible and the UI labels it a heuristic; `external_feeds.validate_impact_against_speed()` is implemented and runs the moment a speed feed supplies the ground truth.
 - **A model-performance regression test guards the learning loop.** `test_model_performance.py` fails CI if a retrain drops the closure model below an AUC floor, lets severity fall to the majority baseline, lets duration lose to the median, or silently drops the road-context features — so a bad retrain can't ship quietly.
+- **Officer push alerts close the last-mile gap.** A barricade recommendation that needs someone watching a dashboard isn't operational. `notifications.py` pushes a **Telegram alert to an officers' group** when a barricade is warranted — fired automatically by the real-time API `/event` path and on-demand from a "🔔 Alert officers" button on Live Ops (with the incident's severity, location, recommended crew, and the diversion summary). Opt-in and OFF by default: credentials come from env vars (`TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`, never committed), and with none set every call is a silent no-op, so it never blocks a request or breaks the demo. Telegram over SMS/web-push: free, no number verification, real phone push, 5-minute setup.
 - **The two structural gaps have honest, drop-in scaffolds.** A measured-impact speed feed and an advance event calendar need an external source we don't fabricate. `external_feeds.py` is the seam: OFF by default, a clear `{"available": False, "reason": ...}` when unconfigured (never invented numbers), config-driven keys/paths, and the calendar load/filter + impact-validation paths fully implemented and tested — so "this would close the gap" is demonstrable, not hand-waved.
 - **Real-time path has live state.** A lightweight **SQLite event store** records each event the API sees and computes *real* backward-looking history (replacing the static corridor-median proxy once warm). The **Live Operations Console** reads the active set for a map-first command center with per-event deployment and barricade alerts.
 - **Defensive ingest + concurrency.** Ingestion runs a schema/range check (Bengaluru coordinate bounds, required columns, null/NaT rates) that fails hard on a missing column and warns on dirt; the decisions log is written under a portable file lock with an atomic replace, so the Streamlit app and API can't corrupt it with concurrent writes.
@@ -308,7 +311,7 @@ We'd rather state these than have a reviewer find them:
 - **Wire a live/typical-speed feed** (TomTom / HERE / Google Roads) into the `external_feeds.py` scaffold — the one remaining external join, and the only path to a *measured* (not heuristic) impact score. The validation correlation is already implemented and tested.
 - **Populate the event calendar** (`external_feeds.py`) with stadium fixtures / festival & rally permits so Layer B does true advance forecasting rather than case-retrieval.
 - Schedule `learning_loop.py` (cron) and auto-ingest newly-resolved logged events into the feature set — the loop is now closed in code (retrain + `metrics_history.csv` drift tracking); what remains is automating the cadence
-- Push alerting for barricade recommendations (the UI is now responsive/mobile-usable — see Design Decisions — so the remaining field-ops gap is notification, not layout) and a dedicated role-separated officer view
+- A dedicated role-separated officer view (commander-at-desk vs officer-on-phone); the UI is already responsive/mobile-usable and officer push alerts ship over Telegram — see Design Decisions
 - Stronger multilingual text models (embeddings) over `description`; extend coverage across the monsoon season
 
 *Done since the last review: the OSM road-class join, predictive hotspot validation, real diversion routing, road-aware impact, and a model-performance regression test — see Design Decisions.*

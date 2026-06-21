@@ -43,6 +43,11 @@ env/
 # ── Streamlit local config ────────────────────────────────────────────────────
 .streamlit/secrets.toml
 
+# ── Secrets / credentials (Telegram bot token etc.) — keep out of git ─────────
+.env
+*.env
+config.local.yaml
+
 # ── OS & editor noise ────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db

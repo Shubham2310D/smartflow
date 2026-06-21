@@ -69,6 +69,9 @@ class Event(BaseModel):
     corridor_7d_score: int | None = Field(None, ge=0)
     description: str = Field("", max_length=2000)
     log: bool = True
+    # Push a Telegram alert to officers when a barricade is warranted. No-op
+    # unless TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID are configured.
+    notify: bool = True
 
     @field_validator("event_cause", "zone", "veh_type")
     @classmethod
@@ -82,11 +85,13 @@ def health():
     # Flag any model trained under a different sklearn/xgboost/numpy than the
     # runtime — version skew can silently break a pickled model.
     warns = check_lib_versions(_clf) + (check_lib_versions(_clo) if _clo else [])
+    from notifications import notify_status  # noqa: PLC0415
     return {
         "status": "ok",
         "closure_model": _clo is not None,
         "model_versions": _clf.get("lib_versions"),
         "version_warnings": warns,
+        "telegram_alerts": notify_status(_ROOT)["available"],
     }
 
 
@@ -151,6 +156,21 @@ def handle_event(ev: Event):
         from diversion import plan_diversion  # noqa: PLC0415 — lazy: only when needed
         diversion_plan = plan_diversion(ev.latitude, ev.longitude, project_root=_ROOT)
 
+    # Push an officer alert when a barricade is warranted (no-op unless Telegram
+    # is configured; wrapped so a delivery hiccup never breaks the response).
+    alert = None
+    if ev.notify and rec.get("barricade_required"):
+        from notifications import notify_incident  # noqa: PLC0415
+        _div = diversion_plan.get("summary") if (diversion_plan and diversion_plan.get("feasible")) else None
+        alert = notify_incident({
+            "severity": sev, "event_cause": ev.event_cause, "zone": ev.zone,
+            "closure_probability": closure_prob,
+            "personnel": rec.get("personnel_count"), "dispatch_from": rec.get("dispatch_from"),
+            "barricade": rec.get("barricade_required"), "diversion_summary": _div,
+            "location": ((ev.latitude, ev.longitude)
+                         if ev.latitude is not None and ev.longitude is not None else None),
+        }, project_root=_ROOT)
+
     if ev.log:
         log_decision({
             "event_cause": ev.event_cause, "zone": ev.zone, "hour_of_day": ev.hour_of_day,
@@ -170,6 +190,7 @@ def handle_event(ev: Event):
         "clearance_range": clearance_range(ev.event_cause),
         "recommendation": rec,
         "diversion_plan": diversion_plan,   # real reroute when a location is given
+        "alert": alert,                     # Telegram push result (None if not triggered)
         # Echo the history features actually used, so the caller can see they
         # came from corridor history (or an override), not a fabricated constant.
         "history_features_used": {

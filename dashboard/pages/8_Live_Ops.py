@@ -182,11 +182,12 @@ if divertable.empty:
 else:
     labels = {
         f"{CAUSE_DISPLAY.get(r['cause'], r['cause'])} · {r['zone']} · impact {r['impact']}"
-        f"  [{r['lat']:.4f}, {r['lon']:.4f}]": (r["lat"], r["lon"])
+        f"  [{r['lat']:.4f}, {r['lon']:.4f}]": r.to_dict()
         for _, r in divertable.head(40).iterrows()
     }
     pick = st.selectbox("Incident to reroute", list(labels.keys()))
-    lat, lon = labels[pick]
+    row = labels[pick]
+    lat, lon = row["lat"], row["lon"]
     plan = _diversion(float(lat), float(lon))
 
     if not plan.get("feasible"):
@@ -215,9 +216,35 @@ else:
         st_folium(dmap, width=None, height=420, returned_objects=[])
         st.caption(plan["summary"])
 
+    # --- Push the alert to officers' phones (Telegram) -----------------------
+    from notifications import notify_incident, notify_status
+    n_ok = notify_status(_ROOT)["available"]
+    bcol1, bcol2 = st.columns([1, 2])
+    with bcol1:
+        send = st.button("🔔 Alert officers", use_container_width=True, disabled=not n_ok,
+                         type="primary")
+    with bcol2:
+        if not n_ok:
+            st.caption("Telegram alerts off — set `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` "
+                       "(env or config) to enable.")
+    if send:
+        res = notify_incident({
+            "severity": row.get("severity"), "event_cause": row.get("cause"),
+            "zone": row.get("zone"), "closure_prob": row.get("closure_prob"),
+            "personnel": row.get("personnel"), "dispatch_from": row.get("station"),
+            "barricade": bool(row.get("barricade")),
+            "diversion_summary": plan["summary"] if plan.get("feasible") else None,
+            "location": (lat, lon),
+        }, project_root=_ROOT)
+        if res.get("sent"):
+            st.success("📲 Alert sent to the officers' Telegram group.")
+        else:
+            st.error(f"Alert not sent: {res.get('reason', 'unknown error')}")
+
 st.caption(
     "Recommendations use the same rule engine as the Resource Plan; closure "
     "likelihood is the calibrated model; impact is the transparent heuristic; the "
     "diversion is routed on the OSM road graph. Active events are served from the "
-    "SQLite store the real-time API also writes to."
+    "SQLite store the real-time API also writes to. Officer alerts go out over "
+    "Telegram (opt-in)."
 )
