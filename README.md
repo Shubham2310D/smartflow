@@ -34,7 +34,7 @@ Bengaluru processes thousands of road incidents every month — accidents, flood
 
 The brief spans two distinct regimes, and so does this dataset. Rather than build one model that pretends they're the same problem, SmartFlow is **explicitly two layers**:
 
-- **Layer A — Background Incident Operations** (≈92% of the data: vehicle breakdowns, potholes, water-logging). These are *reactive*: an incident is logged, then triaged and cleared. This layer does real-time triage, hotspot detection, **road-closure prediction** (the headline model — a real observed target), and resource dispatch.
+- **Layer A — Background Incident Operations** (≈92% of the data: vehicle breakdowns, potholes, water-logging). These are *reactive*: an incident is logged, then triaged and cleared. This layer does real-time triage, hotspot detection, **road-closure prediction** (the headline model — a real observed target, now lifted by an OSM road-class join), **real diversion routing**, and resource dispatch.
 - **Layer B — Planned-Event Impact** (≈8%: `public_event`, `procession`, `vip_movement`, `protest`, plus `construction`). These have a known type, place, and time *ahead of time*, so they're handled by **case-based retrieval** — pull the most similar past events and surface what they actually required — rather than a deep learned forecaster the ~130 gathering rows can't support.
 
 This split is a deliberate scoping choice, not a limitation we're hiding: the dataset is incident-heavy, so we make the incident layer genuinely operational and answer the planned-event half with honest case-based evidence. Where the brief asks for a measured *congestion impact* (queue length, speed drop), the data contains none — see [Honest Limitations](#honest-limitations).
@@ -48,13 +48,16 @@ SmartFlow is built on 8,057 real Bengaluru traffic incidents (Astram dataset, cl
 | Module | What it does |
 |---|---|
 | **Data Pipeline** | Cleans raw Astram CSV — null handling, timestamps normalised to naive Bengaluru-local time at ingestion (the `+00` tag was never truly UTC — see Design Decisions), event-aware cause vocabulary (procession / VIP / protest kept as first-class causes) |
-| **ML Models** | **Road-closure predictor** (calibrated, ROC-AUC 0.695 single-split / 0.666±0.057 walk-forward on a *real observed* target) + severity triage classifier (79.8% chronological holdout vs 63.2% baseline) |
+| **OSM Road Join** | Snaps every incident to its road on the cached OpenStreetMap network → `road_class` + `lane_count` (8,032 / 8,057 matched, mean 16 m). The single biggest external upgrade — see metrics |
+| **ML Models** | **Road-closure predictor** (calibrated, ROC-AUC 0.715 single-split / 0.667±0.059 walk-forward on a *real observed* target) + severity triage classifier (81.3% chronological holdout vs 63.2% baseline) — both lifted by the road-class join |
 | **Free-text Mining** | Bilingual (English + Kannada) keyword pass over `description` → event semantic type (sports event, utility work, VIP movement, …) |
-| **Hotspot Engine** | DBSCAN spatial clustering (219 clusters, config-driven 200 m radius) + KDE density heatmap |
+| **Hotspot Engine** | DBSCAN spatial clustering (config-driven 200 m radius) + KDE density heatmap + a **spatial-temporal holdout** proving the hotspots forecast next-month incidents (PAI up to 4.7× chance) |
 | **Resource Recommender** | Config-driven scoring → personnel, barricade, diversion, dispatch station + empirical clearance range |
+| **Diversion Router** | A **real reroute** around a blockage on the OSM road graph (networkx) — detour path + added distance, not a yes/no flag |
 | **Roster Optimizer** | Min-cost-flow allocation of a fixed officer roster across simultaneous events — high-priority first, travel minimised (the *optimal* in "optimal deployment") |
-| **Live Ops Console** | Map-first command center: active incidents (SQLite store) with per-event deployment, nearest station, and barricade alerts |
-| **Impact Heuristic** | Transparent weighted composite (closure × corridor-pressure × high-incident-window) — an honest stand-in where the data has no measured congestion outcome |
+| **Live Ops Console** | Map-first command center: active incidents (SQLite store) with per-event deployment, nearest station, barricade alerts, and an on-map diversion planner |
+| **Impact Heuristic** | Transparent weighted composite (closure × corridor-pressure × **road-capacity** × high-incident-window) — the road term uses measured OSM class/lanes |
+| **External Feeds** | Drop-in scaffolds for the two roadmap joins — a speed feed (measured-impact ground truth) and an event calendar (advance forecasting) — OFF by default, honest "unavailable" until wired |
 | **Event Planner** | Advance what-if for a known upcoming event (type + place + date/time) → impact forecast + full deployment plan, grounded in similar past events with a confidence rating |
 | **Case-Based Forecast** | Retrieves similar past events (graceful backoff: nearby → type-in-zone → type-citywide → similar) and what they actually required, with a confidence tier |
 | **Feedback Loop** | Logs each decision, tracks predicted-vs-actual, and **closes the loop**: `learning_loop.py` re-fits and records a drift snapshot to `metrics_history.csv` |
@@ -67,13 +70,14 @@ SmartFlow is built on 8,057 real Bengaluru traffic incidents (Astram dataset, cl
 | Metric | Value |
 |---|---|
 | Events processed | 8,057 (from 8,173 raw) |
-| **Road-closure model ROC-AUC** (real observed target, calibrated) | **0.695** single-split; **0.666 ± 0.057** walk-forward (PR-AUC 0.17, recall 0.06 / precision 0.44 @0.5) vs 7.4% base rate |
+| Incidents snapped to an OSM road | **8,032 / 8,057** (mean 16 m to the road) |
+| **Road-closure model ROC-AUC** (real observed target, calibrated) | **0.715** single-split; **0.667 ± 0.059** walk-forward (PR-AUC 0.21) vs 7.4% base rate — *up from 0.695 / 0.17 before the road-class join* |
 | Barricade threshold | **0.15** — *derived* from a cost tradeoff (missed closure = 5× a wasted barricade), not asserted |
-| Severity triage accuracy (chronological holdout) | 79.8% — vs 63.2% majority baseline (lift from leakage-free spatial cluster feature) |
+| Severity triage accuracy (chronological holdout) | 81.3% — vs 63.2% majority baseline (*up from 79.8% with the road-class join*) |
 | Severity triage accuracy (random 5-fold CV) | 86%+ (optimistic — ignores time order) |
-| Clearance predictor vs median baseline | 102.8 min — **~no lift over the median** (reported honestly) |
+| Clearance predictor vs median baseline | MAE 102.7 min vs 106.2 median — **+3.5 min lift** (modest, reported honestly) |
+| **Hotspot predictiveness** (spatial-temporal holdout) | densest **2.3%** of the city captured **11%** of *next month's* incidents (**4.7× chance**); 18% captured 49% (2.7×) |
 | Median incident clearance | 57 min |
-| Hotspot clusters found | 219 |
 | Top hotspot | Sankey Road — 764 events |
 
 > **Which model is the "real" one?** The **road-closure predictor** is — it
@@ -88,14 +92,14 @@ SmartFlow is built on 8,057 real Bengaluru traffic incidents (Astram dataset, cl
 ## Dashboard Pages
 
 1. **Home** — KPI metrics, severity distribution, top corridors
-2. **Hotspot Map** — Folium heatmap + DBSCAN cluster circles with tooltips
-3. **Predict Event** — Severity triage + **calibrated road-closure likelihood** + typical clearance range + SHAP + live text mining
+2. **Hotspot Map** — Folium heatmap + DBSCAN cluster circles with tooltips, plus the **spatial-temporal validation** banner (do past hotspots predict the future?)
+3. **Predict Event** — Severity triage + **calibrated road-closure likelihood** + typical clearance range + road-aware impact + SHAP + live text mining
 4. **Resource Plan** — Deployment recommendation, **case-based analog panel** for planned events, decision logging
 5. **Analytics** — 7 Plotly charts (incl. free-text event type)
 6. **Feedback Loop** — Predicted-vs-actual backtest (with median baseline) + live operator decision log
 7. **Roster Optimizer** — Multi-event conflict view: allocate a fixed officer roster across simultaneously-active events (min-cost flow), with under-resourced events flagged
 8. **Event Planner** — Advance what-if simulator: pick an upcoming event's type, place and date/time → full deployment plan + impact forecast + analog evidence, in one pane
-9. **Live Ops Console** — Map-first command center: active incidents with per-event recommendation, nearest station, and barricade alerts (served from the SQLite store)
+9. **Live Ops Console** — Map-first command center: active incidents with per-event recommendation, nearest station, barricade alerts (served from the SQLite store), and an on-map **diversion planner** that routes a real detour around a chosen blockage
 
 ---
 
@@ -105,14 +109,18 @@ SmartFlow is built on 8,057 real Bengaluru traffic incidents (Astram dataset, cl
 smartflow/
 ├── src/
 │   ├── data_pipeline.py       # Load & clean raw CSV
-│   ├── feature_engineering.py # Features + bilingual text mining
+│   ├── feature_engineering.py # Features + bilingual text mining + OSM road join
+│   ├── osm_features.py        # OpenStreetMap road-class / lane-count join (cached)
 │   ├── model_training.py      # Closure predictor, severity triage, clearance stats
 │   ├── hotspot_engine.py      # DBSCAN + KDE + GeoJSON (config-driven)
+│   ├── hotspot_validation.py  # Spatial-temporal holdout (hit-rate + PAI)
+│   ├── diversion.py           # Real reroute around a blockage (OSM graph, networkx)
 │   ├── resource_recommender.py# Config-driven per-event deployment logic
 │   ├── roster_optimizer.py    # Min-cost-flow allocation across concurrent events
 │   ├── event_analog.py        # Case-based retrieval (backoff + confidence)
 │   ├── event_planner.py       # Advance plan for an upcoming event (impact + deployment)
-│   ├── impact_score.py        # Transparent disruption-impact heuristic
+│   ├── impact_score.py        # Transparent disruption-impact heuristic (road-aware)
+│   ├── external_feeds.py      # Speed-feed + event-calendar scaffolds (roadmap joins)
 │   ├── event_store.py         # SQLite real-time event store (live history + active set)
 │   ├── history_features.py    # Backward-looking history lookup for inference
 │   ├── outcomes_log.py        # Decision/outcome log (append-only CSV)
@@ -140,7 +148,10 @@ smartflow/
 │   ├── test_model_versioning.py # Asserts version-skew detection for pickled models
 │   ├── test_impact_score.py   # Asserts the impact heuristic is bounded & monotonic
 │   ├── test_ingest_validation.py # Asserts schema/range checks on the feed
-│   └── test_event_store.py    # Asserts live history & active-set from the store
+│   ├── test_event_store.py    # Asserts live history & active-set from the store
+│   ├── test_model_performance.py # Asserts the shipped models clear a quality floor
+│   ├── test_diversion.py      # Asserts the reroute is feasible & degrades gracefully
+│   └── test_external_feeds.py # Asserts the roadmap scaffolds work (calendar + validation)
 ├── data/
 │   ├── raw/                   # Place events.csv here
 │   └── processed/             # Auto-generated outputs
@@ -172,8 +183,10 @@ pip install shap --prefer-binary
 
 ```bash
 python src/data_pipeline.py
-python src/feature_engineering.py
+python src/feature_engineering.py   # also runs the OSM road-class join
 ```
+
+> **OSM road join:** the first feature-engineering run fetches the Bengaluru road network from Overpass (one query) and caches it slimmed+gzipped to `data/processed/osm_roads.json.gz` (~5 MB, committed). Every later run is offline. If Overpass is unreachable and no cache exists, the join degrades to safe defaults rather than failing.
 
 ### 4. Train the ML models
 
@@ -209,7 +222,7 @@ docker run -p 8501:8501 smartflow      # → http://localhost:8501
 ### Tests & CI
 
 ```bash
-pytest tests/        # 29 tests: leakage, history, optimizer, planner, learning loop, versioning, impact, ingest, event store
+pytest tests/        # 41 tests: leakage, history, optimizer, planner, learning loop, versioning, impact, ingest, event store, model-performance floor, diversion, external feeds
 ```
 
 [GitHub Actions](.github/workflows/ci.yml) runs the test suite **and** a Docker image build on every push / PR.
@@ -240,7 +253,12 @@ pytest tests/        # 29 tests: leakage, history, optimizer, planner, learning 
 - **Hotspot output fed back as features — and kept only where it measurably helps.** The DBSCAN clusters were computed but never used by the models. We added two **leakage-free, backward-looking** cluster signals (prior events in the cluster; prior closure rate), then *measured* their effect per model rather than assuming it: they lift severity (**0.75 → 0.80**) and duration, but **hurt** the chronological-holdout closure AUC (0.695 → 0.63 — a per-cluster rate is too noisy at a 7% base rate), so they are excluded from closure. Measured, not assumed.
 - **Walk-forward validation, not a lone split.** A single 80/20 chronological cut is one noisy estimate on ~600 rows. The closure model is also backtested over 5 expanding-window folds: **ROC-AUC 0.666 ± 0.057** (the single-split 0.695 sits at the optimistic end). Shown with the band on the Feedback Loop page.
 - **The barricade threshold is derived from a cost tradeoff, not asserted.** A missed real closure (no barricade when a road shuts) is weighted **5× a wasted barricade**; the cost-minimising threshold on the holdout is **0.15** (lower than a naive 0.30 — catching closures matters more). The precision/recall/cost curve is shown on the Feedback Loop page and stamped into the model.
-- **Impact is a transparent heuristic, never a faked model.** The data has no measured congestion outcome (queue/speed/delay), so "impact" can't be learned. We expose an explicit weighted composite (closure × corridor-pressure × high-incident-window), labelled as a heuristic in the UI. An OSM road-class / speed-feed join (roadmap) is what would make it a *measured* impact.
+- **The biggest single upgrade: an OSM road-class join.** The raw data has lat/lon but no road context — a closure on a 6-lane trunk road and one on a residential lane looked identical to the models. `osm_features.py` does one Overpass query for the Bengaluru road network (cached, slimmed to ~5 MB gzip and committed, so rebuilds are offline), then snaps every incident to its nearest road (KD-tree, **8,032 / 8,057 matched at a mean 16 m**) → `road_class` + `lane_count`. *Measured*, not assumed: it lifts the headline closure model (**ROC-AUC 0.695 → 0.715, PR-AUC 0.17 → 0.21**) and severity (**79.8% → 81.3%**), and is neutral for duration (kept there for the SHAP story). The real-time API snaps each event to its exact road; the dashboard uses the corridor's typical road class.
+- **Hotspots are validated as predictive, not just described.** Moran's I confirms the clusters are spatially *real*; `hotspot_validation.py` goes further with a strict **spatial-temporal holdout** (cluster on every month but the last, score the held-out final month) using the standard hotspot-policing metrics — hit-rate and PAI (hit-rate ÷ area-share, Chainey et al. 2008). The densest **2.3%** of the city captured **11%** of the next month's incidents (**4.7× chance**); tightening trades coverage for precision monotonically (PAI 1.5 → 7.0). Shown on the Hotspot Map page.
+- **Diversion is now routed, not just flagged.** `diversion.py` builds a road graph from the cached OSM network (networkx), models the closure as a zone around the incident, finds the road's two opposite exits, and runs Dijkstra around the closure — a **real detour with an added-distance cost** (e.g. ORR @ Marathahalli: a 2.5 km reroute). Surfaced on-map in Live Ops and returned by the API when a location is given. The boolean rule still decides *whether* to divert; this answers *how*.
+- **Impact is a transparent heuristic, now grounded in measured road capacity.** The data has no measured congestion outcome (queue/speed/delay), so "impact" still can't be fully learned — but the heuristic composite now adds a **road-capacity term from the OSM class + lane count** (closure × corridor-pressure × **road-capacity** × high-incident-window), so a closure on an arterial scores above one on a lane. Every weight is visible and the UI labels it a heuristic; `external_feeds.validate_impact_against_speed()` is implemented and runs the moment a speed feed supplies the ground truth.
+- **A model-performance regression test guards the learning loop.** `test_model_performance.py` fails CI if a retrain drops the closure model below an AUC floor, lets severity fall to the majority baseline, lets duration lose to the median, or silently drops the road-context features — so a bad retrain can't ship quietly.
+- **The two structural gaps have honest, drop-in scaffolds.** A measured-impact speed feed and an advance event calendar need an external source we don't fabricate. `external_feeds.py` is the seam: OFF by default, a clear `{"available": False, "reason": ...}` when unconfigured (never invented numbers), config-driven keys/paths, and the calendar load/filter + impact-validation paths fully implemented and tested — so "this would close the gap" is demonstrable, not hand-waved.
 - **Real-time path has live state.** A lightweight **SQLite event store** records each event the API sees and computes *real* backward-looking history (replacing the static corridor-median proxy once warm). The **Live Operations Console** reads the active set for a map-first command center with per-event deployment and barricade alerts.
 - **Defensive ingest + concurrency.** Ingestion runs a schema/range check (Bengaluru coordinate bounds, required columns, null/NaT rates) that fails hard on a missing column and warns on dirt; the decisions log is written under a portable file lock with an atomic replace, so the Streamlit app and API can't corrupt it with concurrent writes.
 - **Colour-blind-safe severity.** Severity is never conveyed by colour alone — every display pairs the red/amber/green with a distinct shape (▲/●/■) and the text label, and map markers also encode it by size.
@@ -270,20 +288,26 @@ We'd rather state these than have a reviewer find them:
 - **No measured congestion outcome.** The dataset records no queue length, speed drop, or delay. "Severity" is a rules-derived label, not an observed impact — so the classifier is framed as *triage*, and the only genuine outcome we model is **clearance time** (`duration_minutes`).
 - **Clearance is mostly clerical, and unpredictable from these features.** Of ~2,760 usable durations, only **69** come from a real `resolved_datetime`; the rest come from `closed_datetime`, an administrative ticket-close that is often batched. So the target is largely paperwork timing — which is why no regressor beats the median, and why we present clearance as an empirical range labelled "close-time", not "time to clear".
 - **The duration target is selection-biased.** Only **43% (3,061 of 7,058)** of closed/resolved tickets carry a usable close-time delta — **57% (3,997)** were never properly closed. That missingness is **not random**: clean, fast-resolving tickets tend to get closed properly, while messy long-running ones are abandoned open, so the trainable subset skews toward *shorter* events and the reported MAE is optimistic. We surface this rather than hide it, and lean on the (bias-aware) empirical median instead of a point forecast.
-- **No measured congestion impact.** The data has no queue length, speed drop, or delay — so true "event impact forecasting" is structurally impossible from this CSV alone. It would need an external signal (OSM road class / lane count, or a typical-speed feed); that join is future work, not faked here.
+- **No *measured* congestion impact (partly addressed).** The CSV has no queue length, speed drop, or delay, so impact still can't be directly *measured* from it. We've closed half the gap — the OSM road-class / lane-count join is now live and feeds a road-capacity term into the impact heuristic — but a true measured impact needs a live/typical-speed feed. That integration is **scaffolded and validation-ready** (`external_feeds.py`), pending an API key; the correlation test that would validate impact against measured slowdown is implemented and tested on synthetic data.
 - **Seasonality blind spot.** Coverage is roughly **Nov–Apr only** — it misses the Jun–Sep monsoon when water-logging and tree-fall spike. Any generalisation claim should be fenced to the non-monsoon window.
 - **`comment` field is empty (0%); `description` is noisy.** Only `description` carries signal, and ~36% of descriptions are too short/generic ("Starting problem", "no") to classify.
-- **Closure model is modest.** ROC-AUC 0.70 is a real signal but not a strong classifier; at a 7.4% base rate recall at the 0.5 threshold is low, so it is used as a *likelihood/ranking* signal, not a hard yes/no.
-- **Moran's I is optional.** It needs `esda`/`libpysal`, which aren't in the core install, so the "clusters are statistically significant" check silently skips in most environments.
-- **Diversion is flagged, not routed.** `diversion_recommended` is a boolean; an actual diversion needs an OSM road graph + routing around the blocked segment, and `endlatitude/endlongitude` is 0 for ~90% of rows, so the geometry isn't derivable from this data. Real routing (osmnx, on a few known corridors) is a scoped next step.
-- **No roles/auth.** The dashboard and API are open — fine for a demo; an operator/admin split and endpoint auth are a deployment next step.
+- **Closure model is modest.** ROC-AUC ~0.72 is a real signal (and improved by the road-class join) but not a strong classifier; at a 7.4% base rate recall at the 0.5 threshold is low, so it is used as a *likelihood/ranking* signal, not a hard yes/no.
+- **Moran's I is optional.** It needs `esda`/`libpysal`, which aren't in the core install, so the "clusters are statistically significant" check silently skips in most environments. (The spatial-temporal holdout, which needs neither, runs everywhere.)
+- **Diversion routes on the *mapped* network, around a fixed-radius closure.** The reroute is real (OSM graph + Dijkstra), but it models the blockage as an ~80 m zone and routes on the cached major-road network, not turn-by-turn with live signals/one-ways. It's a planning-grade detour and added-distance estimate, not a navigation product.
+- **"Real-time" is stream-*ready*, not a live feed.** The `POST /event` API + SQLite store run the full predict→recommend→route→log path and accumulate live history, but no external incident stream is wired in — it's the streaming entry point, demonstrated with synthetic/manual events, not a production ingest.
+- **Resource quantities are illustrative, and can't be validated from this data.** The personnel numbers (2/3/5 + bonuses) are operational rules of thumb, not learned — and they're *unvalidatable* here because `assigned_to_police_id` is ~98% null, so there's no record of what was actually deployed to score against. We surface them as recommendations, not empirical optima.
+- **Hardcoded Bengaluru geography.** Zone/station mappings and coordinate bounds in `utils.py` / `config.yaml` are Bengaluru-specific, so the system isn't portable to another city without re-supplying those tables. Fine for this brief; a one-time config swap otherwise.
+- **No roles/auth.** The dashboard and API are open — fine for a demo; an operator/admin split (commander-at-desk vs officer-on-phone) and endpoint auth are a deployment next step.
 - **The roster optimizer rests on two assumed inputs.** The dataset has no officer roster or station capacity, so the supply side is illustrative (configurable). And 5 months of incidents aren't naturally simultaneous, so concurrency is *constructed* — the events that started within one clock-hour. The allocation maths is real; the scenario it runs on is a scaffold for demonstration, not a live operational feed. Station locations are themselves derived (centroid of the events each station serves), since the data has no station coordinates.
 
 ---
 
 ## Roadmap
 
-- External impact signal (OSM lane count / typical-speed feed) so a closure on an 8-lane arterial scores differently from a side street — the missing piece for true impact forecasting
+- **Wire a live/typical-speed feed** (TomTom / HERE / Google Roads) into the `external_feeds.py` scaffold — the one remaining external join, and the only path to a *measured* (not heuristic) impact score. The validation correlation is already implemented and tested.
+- **Populate the event calendar** (`external_feeds.py`) with stadium fixtures / festival & rally permits so Layer B does true advance forecasting rather than case-retrieval.
 - Schedule `learning_loop.py` (cron) and auto-ingest newly-resolved logged events into the feature set — the loop is now closed in code (retrain + `metrics_history.csv` drift tracking); what remains is automating the cadence
-- Stronger multilingual text models (embeddings) over `description`
-- Extend coverage across the monsoon season
+- A mobile/field view (officer-on-phone) alongside the desktop commander view, with push alerting for barricade recommendations
+- Stronger multilingual text models (embeddings) over `description`; extend coverage across the monsoon season
+
+*Done since the last review: the OSM road-class join, predictive hotspot validation, real diversion routing, road-aware impact, and a model-performance regression test — see Design Decisions.*

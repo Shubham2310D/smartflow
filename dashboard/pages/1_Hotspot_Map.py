@@ -61,6 +61,15 @@ def load_summary():
         return None
     return pd.read_csv(_SUMMARY)
 
+@st.cache_data(show_spinner="Validating hotspots on a future month…")
+def load_validation():
+    """Spatial-temporal holdout: do past hotspots predict next month's incidents?"""
+    try:
+        from hotspot_validation import validate_hotspots
+        return validate_hotspots(_ROOT)
+    except Exception as exc:  # never break the map over a validation hiccup
+        return {"status": f"unavailable ({exc})"}
+
 # ---------------------------------------------------------------------------
 # Severity colours
 # ---------------------------------------------------------------------------
@@ -85,6 +94,39 @@ summary   = load_summary()
 if df is None:
     st.error("Run `python src/hotspot_engine.py` from smartflow/ to generate map data.")
     st.stop()
+
+# ---------------------------------------------------------------------------
+# Predictive validation — are these hotspots more than descriptive?
+# ---------------------------------------------------------------------------
+val = load_validation()
+if val.get("status") == "ok":
+    h = val["headline"]
+    st.success(
+        f"**Hotspots are predictive, not just descriptive.** Trained on "
+        f"{val['train_months'][0]}–{val['train_months'][-1]}, the densest "
+        f"{h['area_share']*100:.1f}% of the city captured "
+        f"**{h['future_hit_rate']*100:.0f}%** of {val['test_month']}'s incidents — "
+        f"**{h['pai']:.1f}× denser than chance** (PAI > 1 ⇒ predictive)."
+    )
+    with st.expander("How this is measured (spatial-temporal holdout)"):
+        st.caption(
+            "Moran's I (below) confirms the clusters are spatially *real*. This goes "
+            "further and asks whether a map fit on the **past** forecasts **future** "
+            "incidents it never saw: cluster on every month but the last, then score "
+            "the held-out final month. *Hit-rate* = share of future incidents inside "
+            "the historical hotspots; *PAI* = hit-rate ÷ area-share (Chainey et al. "
+            "2008). Tightening the footprint trades coverage for precision:"
+        )
+        st.dataframe(
+            pd.DataFrame(val["by_threshold"]).rename(columns={
+                "min_train_events_per_cell": "min events/cell",
+                "n_hotspot_cells": "hotspot cells",
+                "area_share": "area share",
+                "future_hit_rate": "future hit-rate",
+                "pai": "PAI",
+            }),
+            hide_index=True, use_container_width=True,
+        )
 
 # ---------------------------------------------------------------------------
 # Sidebar filters

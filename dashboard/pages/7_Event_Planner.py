@@ -55,6 +55,27 @@ st.caption(
 )
 
 # ---------------------------------------------------------------------------
+# Planned-event calendar (Layer-B forecasting seam). The dataset's planned
+# events are a *log of the past*; a real calendar (fixtures, permits, rallies)
+# is what makes this true advance forecasting. It's optional and off by default.
+# ---------------------------------------------------------------------------
+with st.expander("📆 Planned-event calendar (advance forecasting source)"):
+    from external_feeds import load_calendar
+    cal = load_calendar(_ROOT)
+    if cal["available"]:
+        st.success(f"{cal['n']} planned events loaded. Each can be run through the "
+                   "planner below for a batch advance deployment plan.")
+        st.dataframe(cal["events"], use_container_width=True, hide_index=True)
+    else:
+        st.info(
+            f"No calendar wired in ({cal['reason']}). Without it, the planner uses "
+            "the manual inputs below + case-retrieval from past events — it does not "
+            "invent a forecast. Populate `data/external/event_calendar.csv` "
+            "(stadium fixtures, festival/permit/rally schedules) to drive batch "
+            "advance planning. See `src/external_feeds.py`."
+        )
+
+# ---------------------------------------------------------------------------
 # Inputs
 # ---------------------------------------------------------------------------
 c1, c2, c3, c4 = st.columns([2, 2, 1.4, 1])

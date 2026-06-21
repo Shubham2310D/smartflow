@@ -165,6 +165,9 @@ if submitted:
         "corridor_7d_score":      corridor_7d,
         "cluster_prior_events":   hist["cluster_prior_events"],
         "cluster_closure_rate":   hist["cluster_closure_rate"],
+        # Corridor-typical OSM road context (median class / lanes for this corridor).
+        "road_class_rank":        hist.get("road_class_rank", 0),
+        "lane_count":             hist.get("lane_count", 2),
         "veh_type_encoded":       _VEH_TYPE_MAP.get(veh_type, len(_VEH_TYPE_ORDER) - 1),
     }
     X_clf = pd.DataFrame([all_feat_vals])[clf_pkg["features"]]
@@ -241,6 +244,8 @@ if submitted:
         is_peak=bool(is_peak),
         closure_prob=closure_prob,
         cluster_closure_rate=all_feat_vals.get("cluster_closure_rate"),
+        road_class_rank=all_feat_vals.get("road_class_rank"),
+        lane_count=all_feat_vals.get("lane_count"),
     )
     _IMP_COLOR = {"Low": "#28a745", "Moderate": "#ffc107", "High": "#fd7e14", "Severe": "#dc3545"}
     bd = imp["breakdown"]
@@ -253,9 +258,11 @@ if submitted:
     st.caption(
         f"⚠️ **Heuristic, not a learned forecast** — a transparent weighted composite of "
         f"closure {bd['closure']} (×{imp['weights']['closure']}), corridor pressure "
-        f"{bd['corridor_pressure']} (×{imp['weights']['corridor']}), high-incident window "
-        f"{bd['high_incident_window']} (×{imp['weights']['window']}). The data has no measured "
-        "congestion outcome; an OSM road-class / speed feed (roadmap) would make this a real measure."
+        f"{bd['corridor_pressure']} (×{imp['weights']['corridor']}), road capacity "
+        f"{bd['road_capacity']} (×{imp['weights']['road']}), high-incident window "
+        f"{bd['high_incident_window']} (×{imp['weights']['window']}). The road term uses the "
+        "corridor's OSM class & lane count (measured); a live-speed feed (roadmap) would turn the "
+        "whole score into a directly measured impact."
     )
 
     if desc_text and desc_text.strip():

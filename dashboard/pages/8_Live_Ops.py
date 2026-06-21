@@ -86,6 +86,8 @@ for _, r in df.iterrows():
         is_peak=bool(r.get("is_peak_hour", 0)),
         closure_prob=cp,
         cluster_closure_rate=r.get("cluster_closure_rate"),
+        road_class_rank=r.get("road_class_rank"),
+        lane_count=r.get("lane_count"),
     )
     recs.append({
         "id": r.get("id"), "lat": r.get("latitude"), "lon": r.get("longitude"),
@@ -150,8 +152,69 @@ with right:
         use_container_width=True, hide_index=True,
     )
 
+# ---------------------------------------------------------------------------
+# Diversion planner — a REAL reroute around a chosen blockage (OSM road graph)
+# ---------------------------------------------------------------------------
+st.divider()
+st.subheader("🧭 Diversion planner")
+st.caption(
+    "For incidents where a diversion is warranted, this computes an **actual "
+    "reroute** around the blockage on the OpenStreetMap road graph — not a "
+    "yes/no flag. Pick an incident to see the detour and its added distance."
+)
+
+
+@st.cache_data(show_spinner="Computing reroute…")
+def _diversion(lat: float, lon: float):
+    from diversion import plan_diversion
+    return plan_diversion(lat, lon, project_root=_ROOT)
+
+
+# Offer the incidents a diversion actually matters for: barricade-likely or
+# high-impact, and with a known location.
+divertable = rdf[(rdf["lat"].notna()) & (rdf["lon"].notna()) &
+                 ((rdf["barricade"]) | (rdf["impact"] >= 50))]
+if divertable.empty:
+    st.info("No barricade-likely / high-impact incidents with a location to reroute right now.")
+else:
+    labels = {
+        f"{CAUSE_DISPLAY.get(r['cause'], r['cause'])} · {r['zone']} · impact {r['impact']}"
+        f"  [{r['lat']:.4f}, {r['lon']:.4f}]": (r["lat"], r["lon"])
+        for _, r in divertable.head(40).iterrows()
+    }
+    pick = st.selectbox("Incident to reroute", list(labels.keys()))
+    lat, lon = labels[pick]
+    plan = _diversion(float(lat), float(lon))
+
+    if not plan.get("feasible"):
+        st.warning(f"No reroute available: {plan.get('reason', 'unknown')}.")
+    else:
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Detour length", f"{plan['detour_m']:.0f} m")
+        m2.metric("Added distance", f"+{plan['extra_m']:.0f} m",
+                  delta=f"{plan['extra_pct']:.0f}% longer" if plan.get("extra_pct") else None,
+                  delta_color="inverse")
+        m3.metric("Segments", plan["n_segments"])
+
+        dmap = folium.Map(location=plan["blocked_point"], zoom_start=15,
+                          tiles="cartodbpositron")
+        folium.Marker(plan["blocked_point"], tooltip="Blockage",
+                      icon=folium.Icon(color="red", icon="ban", prefix="fa")).add_to(dmap)
+        folium.Circle(plan["blocked_point"], radius=plan["closure_radius_m"],
+                      color="#dc3545", fill=True, fill_opacity=0.15,
+                      tooltip="Closure zone").add_to(dmap)
+        folium.PolyLine(plan["detour_path"], color="#1f77b4", weight=5, opacity=0.85,
+                        tooltip=plan["summary"]).add_to(dmap)
+        folium.Marker(plan["detour_path"][0], tooltip="Detour entry",
+                      icon=folium.Icon(color="green", icon="play", prefix="fa")).add_to(dmap)
+        folium.Marker(plan["detour_path"][-1], tooltip="Detour exit",
+                      icon=folium.Icon(color="blue", icon="flag", prefix="fa")).add_to(dmap)
+        st_folium(dmap, width=None, height=420, returned_objects=[])
+        st.caption(plan["summary"])
+
 st.caption(
     "Recommendations use the same rule engine as the Resource Plan; closure "
-    "likelihood is the calibrated model; impact is the transparent heuristic. "
-    "Active events are served from the SQLite store the real-time API also writes to."
+    "likelihood is the calibrated model; impact is the transparent heuristic; the "
+    "diversion is routed on the OSM road graph. Active events are served from the "
+    "SQLite store the real-time API also writes to."
 )

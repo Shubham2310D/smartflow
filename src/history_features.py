@@ -22,14 +22,21 @@ import pandas as pd
 
 from utils import get_project_root
 
-# Features this module supplies — all backward-looking signals an incoming event
-# cannot know about itself at inference time. Count-like features are rounded to
-# int; rate-like features (0–1) are kept as floats.
+# Features this module supplies for a new event from its corridor alone:
+#  - backward-looking temporal signals it cannot know about itself
+#    (corridor_7d_score, junction_repeat_count, cluster_*), and
+#  - corridor-typical OSM road attributes (road_class_rank, lane_count). These
+#    are locational, not temporal, but when the Predict form only knows the
+#    corridor (no exact lat/lon), the corridor's median road class / lane count
+#    is the honest stand-in. The real-time API, which does carry lat/lon, snaps
+#    to the exact road instead (see osm_features.add_road_features).
+# Count-like features round to int; rate-like features (0–1) stay float.
 _HISTORY_FEATURES = [
     "corridor_7d_score", "junction_repeat_count",
     "cluster_prior_events", "cluster_closure_rate",
+    "road_class_rank", "lane_count",
 ]
-_RATE_FEATURES = {"cluster_closure_rate"}   # keep as float, don't round to 0/1
+_RATE_FEATURES = {"cluster_closure_rate", "lane_count"}   # keep as float, don't round
 
 _cache: dict | None = None
 

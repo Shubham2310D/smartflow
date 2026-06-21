@@ -75,3 +75,17 @@ resource_rules:
 roster:
   default_officers_per_station: 6
   stations: {}   # e.g. {Cubbon Park: 10, Madiwala: 4} to override individual stations
+
+# External data feeds (see src/external_feeds.py). These are the roadmap joins
+# that would close the two structural gaps: a measured-impact ground truth (speed)
+# and true advance forecasting for planned events (calendar). Both are OPTIONAL
+# and OFF by default — the system runs fully without them; wiring one in is a
+# drop-in upgrade, not a rewrite.
+external:
+  speed:
+    provider: none           # none | tomtom | here  (needs an API key below)
+    api_key: ""              # supply your key, or set env SMARTFLOW_SPEED_API_KEY
+  event_calendar:
+    # CSV of known upcoming planned events (stadium fixtures, permits, rallies).
+    # Populate data/external/event_calendar.csv from the template the module writes.
+    path: data/external/event_calendar.csv

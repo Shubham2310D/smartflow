@@ -37,6 +37,7 @@ from model_training import SEVERITY_INVERSE_MAP, check_lib_versions  # noqa: E40
 from outcomes_log import log_decision  # noqa: E402
 from event_store import active_events, live_history, record_event  # noqa: E402
 from history_features import history_features  # noqa: E402
+from osm_features import road_context  # noqa: E402
 from resource_recommender import clearance_range, recommend  # noqa: E402
 from utils import is_peak_hour  # noqa: E402
 
@@ -56,6 +57,11 @@ class Event(BaseModel):
     hour_of_day: int = Field(9, ge=0, le=23)
     day_of_week: int = Field(0, ge=0, le=6)
     veh_type: str = "unknown"
+    # Optional event location. When supplied, the event is snapped to its exact
+    # OSM road (class + lanes); otherwise the corridor's typical road context is
+    # used. Bounds are the Bengaluru operating area.
+    latitude: float | None = Field(None, ge=12.5, le=13.5)
+    longitude: float | None = Field(None, ge=77.2, le=77.9)
     # History features are looked up from the corridor's historical medians by
     # default (see history_features). Pass explicit values only to override —
     # e.g. when a real event store can supply a live count.
@@ -98,6 +104,16 @@ def handle_event(ev: Event):
     c7d = (ev.corridor_7d_score if ev.corridor_7d_score is not None
            else live.get("corridor_7d_score", hist["corridor_7d_score"]))
 
+    # Road context: snap to the exact OSM road when a location is given, else use
+    # the corridor's typical class / lane count from history.
+    if ev.latitude is not None and ev.longitude is not None:
+        rc = road_context(ev.latitude, ev.longitude, project_root=_ROOT)
+        road_rank, lane_cnt, road_src = rc["road_class_rank"], rc["lane_count"], "osm_snap"
+    else:
+        road_rank = hist.get("road_class_rank", 0)
+        lane_cnt = hist.get("lane_count", 2)
+        road_src = "corridor_history"
+
     feats = {
         "cause_severity_weight":  CAUSE_SEVERITY_WEIGHT.get(ev.event_cause, 1),
         "road_closure_binary":    0,
@@ -110,6 +126,8 @@ def handle_event(ev: Event):
         "corridor_7d_score":      c7d,
         "cluster_prior_events":   hist["cluster_prior_events"],
         "cluster_closure_rate":   hist["cluster_closure_rate"],
+        "road_class_rank":        road_rank,
+        "lane_count":             lane_cnt,
         "veh_type_encoded":       _VEH_TYPE_MAP.get(ev.veh_type, len(_VEH_TYPE_ORDER) - 1),
     }
     X_clf = pd.DataFrame([feats])[_clf["features"]]
@@ -125,6 +143,13 @@ def handle_event(ev: Event):
         hour_of_day=ev.hour_of_day, zone=ev.zone, closure_probability=closure_prob,
         barricade_threshold=(_clo.get("barricade_threshold") if _clo else None),
     )
+
+    # If a diversion is warranted AND we know where the event is, compute a REAL
+    # reroute around the blockage (not just the boolean flag).
+    diversion_plan = None
+    if rec.get("diversion_recommended") and ev.latitude is not None and ev.longitude is not None:
+        from diversion import plan_diversion  # noqa: PLC0415 — lazy: only when needed
+        diversion_plan = plan_diversion(ev.latitude, ev.longitude, project_root=_ROOT)
 
     if ev.log:
         log_decision({
@@ -144,6 +169,7 @@ def handle_event(ev: Event):
         "road_closure_likelihood": closure_prob,
         "clearance_range": clearance_range(ev.event_cause),
         "recommendation": rec,
+        "diversion_plan": diversion_plan,   # real reroute when a location is given
         # Echo the history features actually used, so the caller can see they
         # came from corridor history (or an override), not a fabricated constant.
         "history_features_used": {
@@ -152,6 +178,11 @@ def handle_event(ev: Event):
             "corridor_7d_score": c7d,
             "source": ("override" if (ev.junction_repeat_count is not None or ev.corridor_7d_score is not None)
                        else "live_store" if live else "corridor_history"),
+        },
+        "road_context_used": {
+            "road_class_rank": road_rank,
+            "lane_count": lane_cnt,
+            "source": road_src,
         },
     }
 

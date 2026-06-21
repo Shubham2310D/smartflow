@@ -374,6 +374,11 @@ _MODEL_COLS = [
     # raw inputs
     "event_cause", "priority", "requires_road_closure", "veh_type",
     "start_datetime",
+    # OSM road context (joined from the cached Bengaluru road network)
+    "road_class",
+    "road_class_rank",
+    "lane_count",
+    "road_dist_m",
     # engineered features (XGBoost inputs)
     "cause_severity_weight",
     "road_closure_binary",
@@ -424,6 +429,10 @@ def run_feature_engineering(
         # Lazy import avoids circular issues when both files are imported together
         from data_pipeline import run_pipeline  # noqa: PLC0415
         df = run_pipeline(project_root)
+
+    logger.info("Joining OSM road class / lane count…")
+    from osm_features import add_road_features  # noqa: PLC0415
+    df = add_road_features(df, project_root)
 
     df = compute_duration(df)
     df = compute_severity_class(df)

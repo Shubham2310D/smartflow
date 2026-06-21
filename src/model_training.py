@@ -99,6 +99,11 @@ CLF_FEATURES = [
     # cluster_closure_rate is deliberately EXCLUDED here: severity_class is partly
     # derived from closure, so a closure base-rate would re-introduce circularity.
     "cluster_prior_events",
+    # OSM road context (joined in osm_features.py). Bigger roads / more lanes
+    # genuinely escalate disruption. MEASURED to help on the chronological
+    # holdout: accuracy 0.798 -> 0.807, macro-F1 0.649 -> 0.659.
+    "road_class_rank",
+    "lane_count",
     "veh_type_encoded",
 ]
 
@@ -122,6 +127,11 @@ REG_FEATURES = [
     "corridor_7d_score",
     "cluster_prior_events",
     "cluster_closure_rate",
+    # OSM road context — neutral for duration on the holdout (MAE 102.8 -> 102.7
+    # min), kept because road class is a legitimate clearance-time driver and it
+    # enriches the SHAP story without hurting the metric.
+    "road_class_rank",
+    "lane_count",
     "veh_type_encoded",
 ]
 
@@ -146,6 +156,12 @@ CLOSURE_FEATURES = [
     # (0.695 -> 0.63 — the per-cluster rate is too noisy at a 7% base rate), so
     # they are deliberately excluded from closure. They help severity & duration,
     # where they're kept. Measured, not assumed.
+    #
+    # OSM road context, by contrast, HELPS closure — the single biggest lift here:
+    # ROC-AUC 0.695 -> 0.711, PR-AUC 0.170 -> 0.185 on the chronological holdout.
+    # A closure on a 6-lane trunk road is genuinely different from one on a lane.
+    "road_class_rank",
+    "lane_count",
     "veh_type_encoded",
 ]
 

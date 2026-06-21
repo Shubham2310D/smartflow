@@ -1,0 +1,74 @@
+{
+  "status": "ok",
+  "cell_km": 0.5,
+  "train_months": [
+    "2023-11",
+    "2023-12",
+    "2024-01",
+    "2024-02",
+    "2024-03"
+  ],
+  "test_month": "2024-04",
+  "n_train": 7435,
+  "n_test": 622,
+  "occupied_cells": 1081,
+  "headline": {
+    "min_train_events_per_cell": 35,
+    "n_hotspot_cells": 25,
+    "area_share": 0.0231,
+    "future_hit_rate": 0.1077,
+    "pai": 4.66
+  },
+  "by_threshold": [
+    {
+      "min_train_events_per_cell": 3,
+      "n_hotspot_cells": 612,
+      "area_share": 0.5661,
+      "future_hit_rate": 0.8457,
+      "pai": 1.49
+    },
+    {
+      "min_train_events_per_cell": 5,
+      "n_hotspot_cells": 431,
+      "area_share": 0.3987,
+      "future_hit_rate": 0.7508,
+      "pai": 1.88
+    },
+    {
+      "min_train_events_per_cell": 8,
+      "n_hotspot_cells": 305,
+      "area_share": 0.2821,
+      "future_hit_rate": 0.6383,
+      "pai": 2.26
+    },
+    {
+      "min_train_events_per_cell": 12,
+      "n_hotspot_cells": 196,
+      "area_share": 0.1813,
+      "future_hit_rate": 0.4871,
+      "pai": 2.69
+    },
+    {
+      "min_train_events_per_cell": 20,
+      "n_hotspot_cells": 91,
+      "area_share": 0.0842,
+      "future_hit_rate": 0.3006,
+      "pai": 3.57
+    },
+    {
+      "min_train_events_per_cell": 35,
+      "n_hotspot_cells": 25,
+      "area_share": 0.0231,
+      "future_hit_rate": 0.1077,
+      "pai": 4.66
+    },
+    {
+      "min_train_events_per_cell": 60,
+      "n_hotspot_cells": 8,
+      "area_share": 0.0074,
+      "future_hit_rate": 0.0514,
+      "pai": 6.95
+    }
+  ],
+  "interpretation": "Hotspots fit on 2023-11\u20132024-03 covering 2.3% of the active area captured 11% of 2024-04's incidents \u2014 4.7\u00d7 denser than chance (PAI>1 \u21d2 predictive)."
+}
