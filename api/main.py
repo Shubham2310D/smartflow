@@ -85,6 +85,7 @@ def health():
     # Flag any model trained under a different sklearn/xgboost/numpy than the
     # runtime — version skew can silently break a pickled model.
     warns = check_lib_versions(_clf) + (check_lib_versions(_clo) if _clo else [])
+    warns = list(dict.fromkeys(warns))   # dedupe identical per-library warnings
     from notifications import notify_status  # noqa: PLC0415
     return {
         "status": "ok",

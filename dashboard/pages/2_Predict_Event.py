@@ -76,6 +76,8 @@ all_corridors = corridor_list()
 # than this environment — version skew can silently corrupt pickled-model output.
 _ver_warns = check_lib_versions(clf_pkg) + (check_lib_versions(clo_pkg) if clo_pkg else [])
 _ver_warns = [w for w in _ver_warns if "no recorded training versions" not in w]
+# Both models train in the same env, so dedupe identical per-library warnings.
+_ver_warns = list(dict.fromkeys(_ver_warns))
 if _ver_warns:
     st.warning("⚠️ Model/runtime library mismatch — predictions may be unreliable: "
                + "; ".join(_ver_warns) + ". Retrain with `python src/model_training.py`.")

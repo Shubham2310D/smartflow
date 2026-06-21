@@ -2,15 +2,22 @@
 # Install with:  pip install --prefer-binary -r requirements.txt
 
 # Core data
-pandas>=2.2.0
-numpy>=2.1.0
+# numpy/pandas are PINNED to the versions the committed models were trained with.
+# A pickled model can mis-load or predict unreliably under a different numpy, and
+# an unpinned (>=) spec let the host install a newer one — the cause of the
+# "model/runtime library mismatch" warning. Keep these in sync with the model
+# payloads' stamped lib_versions (see model_training.lib_versions); bump all
+# together and retrain.
+numpy==2.2.6
+pandas==2.3.2
 scipy>=1.14.0
 networkx>=3.2          # min-cost-flow roster optimiser
 
-# Machine learning
-scikit-learn>=1.5.0
-xgboost>=2.1.0
-joblib>=1.4.0
+# Machine learning — PINNED for the same reason (these govern pickle/predict
+# compatibility; they are exactly what check_lib_versions() guards).
+scikit-learn==1.7.2
+xgboost==3.1.1
+joblib==1.5.2
 
 # Dashboard
 streamlit>=1.35.0
