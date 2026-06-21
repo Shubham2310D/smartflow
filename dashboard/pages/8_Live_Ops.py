@@ -235,8 +235,9 @@ else:
             st.caption(plan["summary"])
 
         # --- Push the alert to officers' phones (Telegram) -------------------
-        from notifications import notify_incident, notify_status
+        from notifications import notify_incident, notify_status, invite_link
         n_ok = notify_status(_ROOT)["available"]
+        link = invite_link(_ROOT)
         bcol1, bcol2 = st.columns([1, 2])
         with bcol1:
             send = st.button("🔔 Alert officers", use_container_width=True, disabled=not n_ok,
@@ -245,6 +246,9 @@ else:
             if not n_ok:
                 st.caption("Telegram alerts off — set `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` "
                            "(env or config) to enable.")
+            elif link:
+                st.caption(f"📲 [Join the alerts group]({link}) to receive these "
+                           "notifications on your phone.")
         if send:
             res = notify_incident({
                 "severity": row.get("severity"), "event_cause": row.get("cause"),

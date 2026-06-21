@@ -50,6 +50,13 @@ def _credentials(project_root: Path) -> tuple[str, str]:
     return token.strip(), chat.strip()
 
 
+def invite_link(project_root: Path | None = None) -> str:
+    """Public group invite link (for the demo 'join & watch alerts' link). May be ''."""
+    root = project_root or Path(__file__).resolve().parents[1]
+    return (os.environ.get("TELEGRAM_INVITE_LINK")
+            or _cfg(root).get("telegram_invite_link") or "").strip()
+
+
 def notify_status(project_root: Path | None = None) -> dict:
     """Report whether Telegram alerts are configured, without sending anything."""
     root = project_root or Path(__file__).resolve().parents[1]

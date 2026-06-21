@@ -22,6 +22,7 @@ def unconfigured(tmp_path, monkeypatch):
     """A project root with no config + no env credentials."""
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+    monkeypatch.delenv("TELEGRAM_INVITE_LINK", raising=False)
     return tmp_path
 
 
@@ -46,6 +47,16 @@ def test_env_credentials_flip_status_available(unconfigured, monkeypatch):
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:abc")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "-100999")
     assert nt.notify_status(unconfigured)["available"] is True
+
+
+def test_invite_link_from_env_overrides(unconfigured, monkeypatch):
+    monkeypatch.setenv("TELEGRAM_INVITE_LINK", "https://t.me/+demo123")
+    assert nt.invite_link(unconfigured) == "https://t.me/+demo123"
+
+
+def test_invite_link_blank_when_unset(unconfigured):
+    # tmp_path has no config.yaml and the env var is cleared → empty string.
+    assert nt.invite_link(unconfigured) == ""
 
 
 def test_alert_message_contains_key_fields():

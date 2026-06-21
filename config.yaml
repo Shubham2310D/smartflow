@@ -98,3 +98,7 @@ external:
 notifications:
   telegram_bot_token: ""
   telegram_chat_id: ""
+  # Public group invite link — safe to commit (grants read-only membership, NOT
+  # bot control). Shown on Live Ops so judges/reviewers can join and watch alerts
+  # land in real time. Revoke/regenerate in Telegram after the demo if desired.
+  telegram_invite_link: "https://t.me/+JaVP2X-Q9383NzE1"
