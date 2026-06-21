@@ -34,6 +34,9 @@ from utils import CAUSE_DISPLAY, severity_badge
 
 st.set_page_config(page_title="Roster Optimizer | SmartFlow", page_icon="🚓", layout="wide")
 
+from utils import inject_responsive_css  # noqa: E402
+inject_responsive_css()
+
 _FEATS = _ROOT / "data" / "processed" / "features.csv"
 
 

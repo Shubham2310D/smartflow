@@ -26,6 +26,9 @@ from outcomes_log import load_decisions, summary
 
 st.set_page_config(page_title="Feedback Loop | SmartFlow", page_icon="🔁", layout="wide")
 
+from utils import inject_responsive_css  # noqa: E402
+inject_responsive_css()
+
 _BACKTEST = _ROOT / "data" / "processed" / "duration_backtest.csv"
 _DUR_PKL  = _ROOT / "models" / "duration_predictor.pkl"
 _CLO_PKL  = _ROOT / "models" / "closure_predictor.pkl"

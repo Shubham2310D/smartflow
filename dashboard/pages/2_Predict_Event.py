@@ -31,6 +31,9 @@ from utils import ALL_CAUSES, ALL_ZONES, CAUSE_DISPLAY, get_nearest_station, is_
 
 st.set_page_config(page_title="Predict Event | SmartFlow", page_icon="🔮", layout="wide")
 
+from utils import inject_responsive_css  # noqa: E402
+inject_responsive_css()
+
 # ---------------------------------------------------------------------------
 # Load models (cached)
 # ---------------------------------------------------------------------------

@@ -26,6 +26,9 @@ from utils import ALL_ZONES, CAUSE_DISPLAY, severity_badge
 
 st.set_page_config(page_title="Event Planner | SmartFlow", page_icon="📅", layout="wide")
 
+from utils import inject_responsive_css  # noqa: E402
+inject_responsive_css()
+
 _CONF = {
     "high":   ("#198754", "High confidence", "backed by several closely-matched past events"),
     "medium": ("#fd7e14", "Medium confidence", "a moderate number of analogs, or a citywide match"),

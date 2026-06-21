@@ -21,6 +21,9 @@ from streamlit_folium import st_folium
 
 st.set_page_config(page_title="Hotspot Map | SmartFlow", page_icon="🗺️", layout="wide")
 
+from utils import inject_responsive_css
+inject_responsive_css()
+
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------

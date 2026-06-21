@@ -19,6 +19,9 @@ from utils import ALL_CAUSES, ALL_ZONES, CAUSE_DISPLAY
 
 st.set_page_config(page_title="Resource Plan | SmartFlow", page_icon="🚔", layout="wide")
 
+from utils import inject_responsive_css  # noqa: E402
+inject_responsive_css()
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

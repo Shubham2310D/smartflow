@@ -24,6 +24,9 @@ from utils import CAUSE_DISPLAY, is_peak_hour
 
 st.set_page_config(page_title="Analytics | SmartFlow", page_icon="📊", layout="wide")
 
+from utils import inject_responsive_css  # noqa: E402
+inject_responsive_css()
+
 # ---------------------------------------------------------------------------
 # Data
 # ---------------------------------------------------------------------------

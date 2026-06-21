@@ -23,6 +23,9 @@ st.set_page_config(
     initial_sidebar_state = "expanded",
 )
 
+from utils import inject_responsive_css  # noqa: E402
+inject_responsive_css()
+
 # ---------------------------------------------------------------------------
 # Header
 # ---------------------------------------------------------------------------

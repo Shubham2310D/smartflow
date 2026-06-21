@@ -81,6 +81,69 @@ def severity_badge(sev: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Responsive / mobile UI — injected on every dashboard page.
+#
+# Streamlit is desktop-first: columns stay side-by-side on phones (squishing
+# metrics and cards into unreadable slivers), the content padding wastes space,
+# and headings are oversized for a 360 px screen. A field officer opening this on
+# a phone needs the layout to STACK. This injects one stylesheet that, below a
+# tablet/phone breakpoint, forces column rows to wrap to full width, trims
+# padding, scales headings, and keeps maps/tables/charts inside the viewport so
+# the page never scrolls sideways. Call it once per page, right after
+# st.set_page_config(). Lazy streamlit import keeps utils usable by the
+# (non-Streamlit) data pipeline.
+# ---------------------------------------------------------------------------
+
+_RESPONSIVE_CSS = """
+<style>
+/* Never let the page scroll sideways on a phone. */
+[data-testid="stAppViewContainer"] { overflow-x: hidden; }
+
+/* Tablets and phones: let column rows wrap instead of squishing. */
+@media (max-width: 900px) {
+  .block-container { padding-left: 1.1rem !important; padding-right: 1.1rem !important;
+                     padding-top: 2.6rem !important; }
+  [data-testid="stHorizontalBlock"] { flex-wrap: wrap !important; gap: 0.6rem !important; }
+  /* Each column drops to at least half-width (two-up) on tablets. */
+  [data-testid="stHorizontalBlock"] > [data-testid="stColumn"],
+  [data-testid="stHorizontalBlock"] > [data-testid="column"] {
+      flex: 1 1 48% !important; min-width: 48% !important;
+  }
+}
+
+/* Phones: full-width stacking + tighter type. */
+@media (max-width: 640px) {
+  .block-container { padding-left: 0.8rem !important; padding-right: 0.8rem !important;
+                     padding-bottom: 3rem !important; }
+  [data-testid="stHorizontalBlock"] > [data-testid="stColumn"],
+  [data-testid="stHorizontalBlock"] > [data-testid="column"] {
+      flex: 1 1 100% !important; min-width: 100% !important; width: 100% !important;
+  }
+  h1 { font-size: 1.5rem !important; line-height: 1.25 !important; }
+  h2 { font-size: 1.2rem !important; }
+  h3 { font-size: 1.05rem !important; }
+  /* Metric values can overflow their box on narrow screens. */
+  [data-testid="stMetricValue"] { font-size: 1.35rem !important; }
+  /* Wide tables/maps scroll within their own box, not the page. */
+  [data-testid="stDataFrame"], [data-testid="stTable"] { overflow-x: auto !important; }
+}
+
+/* Custom HTML cards (impact/severity/plan tiles) shouldn't overflow their column. */
+div[style*="border-radius"] { max-width: 100%; box-sizing: border-box; word-wrap: break-word; }
+
+/* Keep folium/plotly inside the viewport width. */
+iframe, .stPlotlyChart { max-width: 100% !important; }
+</style>
+"""
+
+
+def inject_responsive_css() -> None:
+    """Inject the mobile/responsive stylesheet. Call after st.set_page_config()."""
+    import streamlit as st  # lazy: only when a dashboard page calls it
+    st.markdown(_RESPONSIVE_CSS, unsafe_allow_html=True)
+
+
+# ---------------------------------------------------------------------------
 # Zone → police station mapping
 # (covers all zone values seen in the Astram dataset)
 # ---------------------------------------------------------------------------
