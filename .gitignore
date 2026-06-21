@@ -22,7 +22,7 @@ data/processed/events.db
 *.lock
 *.csv.tmp
 
-# ── OSM cache: commit the slim gzip (~5 MB), never the raw ~73 MB dump ────────
+# ── OSM cache: commit the slim major-road gzip (~1 MB), never the raw dump ────
 data/processed/osm_roads.json
 !data/processed/osm_roads.json.gz
 

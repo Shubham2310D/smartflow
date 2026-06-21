@@ -45,11 +45,15 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-# Canonical on-disk cache: a SLIM, gzipped road network (≈5 MB vs ~73 MB raw
-# Overpass), holding only what features + routing need — committed for offline
-# rebuilds. Schema: {"ways": [{"h": highway_class, "l": lanes_or_null,
+# Canonical on-disk cache: a SLIM, gzipped MAJOR-ROAD network (motorway→tertiary;
+# residential is dropped — it's 90% of ways but you never divert arterial traffic
+# onto lanes, and incidents still snap to the nearby arterial). ~1 MB, committed
+# for offline rebuilds. Schema: {"ways": [{"h": highway_class, "l": lanes_or_null,
 # "g": [[lat, lon], …]}, …]}.
 _CACHE_NAME = "osm_roads.json.gz"
+
+# Parsed-payload cache (path → dict), so the JSON is decoded once per process.
+_PAYLOAD_CACHE: dict[str, dict] = {}
 
 # ---------------------------------------------------------------------------
 # Road-class hierarchy → ordinal rank (higher = bigger road = more disruption
@@ -63,9 +67,12 @@ ROAD_CLASS_RANK: dict[str, int] = {
     "tertiary": 2, "tertiary_link": 2,
     "unclassified": 1, "residential": 1, "living_street": 1, "service": 1,
 }
-# Classes we ask Overpass for (anything finer than residential is noise here).
+# Classes we ask Overpass for. MAJOR roads only — residential/unclassified are
+# ~90% of the network but irrelevant to arterial diversion and add a 5× memory
+# cost; incidents on them still snap to the nearest major road within the
+# threshold. Keep this in sync with the committed cache (see _CACHE_NAME).
 _QUERY_CLASSES = (
-    "motorway|trunk|primary|secondary|tertiary|unclassified|residential"
+    "motorway|trunk|primary|secondary|tertiary"
     "|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link"
 )
 # Typical lane count when the OSM `lanes` tag is missing (it usually is on
@@ -118,9 +125,15 @@ def fetch_road_network(bbox: tuple[float, float, float, float],
     run. Raises only if there is neither a cache nor a reachable Overpass.
     """
     if cache_path.exists() and not force:
-        logger.info("OSM road network: using cache %s", cache_path.name)
-        with gzip.open(cache_path, "rt", encoding="utf-8") as f:
-            return json.load(f)
+        key = str(cache_path)
+        # Parse once per process — the slim road network is ~MBs of JSON and
+        # several callers (features, diversion) would otherwise each re-parse it,
+        # spiking memory on a small (e.g. 512 MB) host.
+        if key not in _PAYLOAD_CACHE:
+            logger.info("OSM road network: loading cache %s", cache_path.name)
+            with gzip.open(cache_path, "rt", encoding="utf-8") as f:
+                _PAYLOAD_CACHE[key] = json.load(f)
+        return _PAYLOAD_CACHE[key]
 
     s, w, n, e = bbox
     query = (

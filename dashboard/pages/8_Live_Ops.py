@@ -127,9 +127,15 @@ with left:
     st.subheader("Active incident map")
     fmap = folium.Map(location=[df["latitude"].mean(), df["longitude"].mean()],
                       zoom_start=11, tiles="cartodbpositron")
-    for _, e in rdf.iterrows():
-        if pd.isna(e["lat"]) or pd.isna(e["lon"]):
-            continue
+    # Cap markers: thousands of CircleMarkers bloat the Folium HTML and memory.
+    # Show the highest-impact incidents (the ones an operator acts on first).
+    _MAP_CAP = 300
+    map_rows = rdf.dropna(subset=["lat", "lon"]).sort_values("impact", ascending=False)
+    if len(map_rows) > _MAP_CAP:
+        st.caption(f"Showing the {_MAP_CAP} highest-impact of {len(map_rows)} "
+                   "located incidents (map performance).")
+        map_rows = map_rows.head(_MAP_CAP)
+    for _, e in map_rows.iterrows():
         radius = {"High": 9, "Medium": 6, "Low": 4}.get(e["severity"], 5)
         cp_txt = f"{e['closure_prob']*100:.0f}%" if e["closure_prob"] is not None else "n/a"
         folium.CircleMarker(
@@ -187,59 +193,71 @@ else:
     }
     pick = st.selectbox("Incident to reroute", list(labels.keys()))
     row = labels[pick]
-    lat, lon = row["lat"], row["lon"]
-    plan = _diversion(float(lat), float(lon))
+    lat, lon = float(row["lat"]), float(row["lon"])
+    key = f"{lat:.5f},{lon:.5f}"
 
-    if not plan.get("feasible"):
-        st.warning(f"No reroute available: {plan.get('reason', 'unknown')}.")
+    # Routing loads the OSM road graph into memory, so compute ONLY on demand
+    # (a click), never on every page render — this keeps the console lightweight
+    # on a small host (the graph isn't touched until someone asks for a reroute).
+    if st.button("🧭 Compute reroute", type="primary"):
+        st.session_state["divplan"] = {"key": key, "plan": _diversion(lat, lon), "row": row}
+
+    state = st.session_state.get("divplan")
+    if not state or state["key"] != key:
+        st.caption("Pick an incident and click **Compute reroute** — the road graph "
+                   "loads on demand to keep the console lightweight.")
     else:
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Detour length", f"{plan['detour_m']:.0f} m")
-        m2.metric("Added distance", f"+{plan['extra_m']:.0f} m",
-                  delta=f"{plan['extra_pct']:.0f}% longer" if plan.get("extra_pct") else None,
-                  delta_color="inverse")
-        m3.metric("Segments", plan["n_segments"])
-
-        dmap = folium.Map(location=plan["blocked_point"], zoom_start=15,
-                          tiles="cartodbpositron")
-        folium.Marker(plan["blocked_point"], tooltip="Blockage",
-                      icon=folium.Icon(color="red", icon="ban", prefix="fa")).add_to(dmap)
-        folium.Circle(plan["blocked_point"], radius=plan["closure_radius_m"],
-                      color="#dc3545", fill=True, fill_opacity=0.15,
-                      tooltip="Closure zone").add_to(dmap)
-        folium.PolyLine(plan["detour_path"], color="#1f77b4", weight=5, opacity=0.85,
-                        tooltip=plan["summary"]).add_to(dmap)
-        folium.Marker(plan["detour_path"][0], tooltip="Detour entry",
-                      icon=folium.Icon(color="green", icon="play", prefix="fa")).add_to(dmap)
-        folium.Marker(plan["detour_path"][-1], tooltip="Detour exit",
-                      icon=folium.Icon(color="blue", icon="flag", prefix="fa")).add_to(dmap)
-        st_folium(dmap, width=None, height=420, returned_objects=[])
-        st.caption(plan["summary"])
-
-    # --- Push the alert to officers' phones (Telegram) -----------------------
-    from notifications import notify_incident, notify_status
-    n_ok = notify_status(_ROOT)["available"]
-    bcol1, bcol2 = st.columns([1, 2])
-    with bcol1:
-        send = st.button("🔔 Alert officers", use_container_width=True, disabled=not n_ok,
-                         type="primary")
-    with bcol2:
-        if not n_ok:
-            st.caption("Telegram alerts off — set `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` "
-                       "(env or config) to enable.")
-    if send:
-        res = notify_incident({
-            "severity": row.get("severity"), "event_cause": row.get("cause"),
-            "zone": row.get("zone"), "closure_prob": row.get("closure_prob"),
-            "personnel": row.get("personnel"), "dispatch_from": row.get("station"),
-            "barricade": bool(row.get("barricade")),
-            "diversion_summary": plan["summary"] if plan.get("feasible") else None,
-            "location": (lat, lon),
-        }, project_root=_ROOT)
-        if res.get("sent"):
-            st.success("📲 Alert sent to the officers' Telegram group.")
+        plan, row = state["plan"], state["row"]
+        if not plan.get("feasible"):
+            st.warning(f"No reroute available: {plan.get('reason', 'unknown')}.")
         else:
-            st.error(f"Alert not sent: {res.get('reason', 'unknown error')}")
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Detour length", f"{plan['detour_m']:.0f} m")
+            m2.metric("Added distance", f"+{plan['extra_m']:.0f} m",
+                      delta=f"{plan['extra_pct']:.0f}% longer" if plan.get("extra_pct") else None,
+                      delta_color="inverse")
+            m3.metric("Segments", plan["n_segments"])
+
+            dmap = folium.Map(location=plan["blocked_point"], zoom_start=15,
+                              tiles="cartodbpositron")
+            folium.Marker(plan["blocked_point"], tooltip="Blockage",
+                          icon=folium.Icon(color="red", icon="ban", prefix="fa")).add_to(dmap)
+            folium.Circle(plan["blocked_point"], radius=plan["closure_radius_m"],
+                          color="#dc3545", fill=True, fill_opacity=0.15,
+                          tooltip="Closure zone").add_to(dmap)
+            folium.PolyLine(plan["detour_path"], color="#1f77b4", weight=5, opacity=0.85,
+                            tooltip=plan["summary"]).add_to(dmap)
+            folium.Marker(plan["detour_path"][0], tooltip="Detour entry",
+                          icon=folium.Icon(color="green", icon="play", prefix="fa")).add_to(dmap)
+            folium.Marker(plan["detour_path"][-1], tooltip="Detour exit",
+                          icon=folium.Icon(color="blue", icon="flag", prefix="fa")).add_to(dmap)
+            st_folium(dmap, width=None, height=420, returned_objects=[])
+            st.caption(plan["summary"])
+
+        # --- Push the alert to officers' phones (Telegram) -------------------
+        from notifications import notify_incident, notify_status
+        n_ok = notify_status(_ROOT)["available"]
+        bcol1, bcol2 = st.columns([1, 2])
+        with bcol1:
+            send = st.button("🔔 Alert officers", use_container_width=True, disabled=not n_ok,
+                             type="primary")
+        with bcol2:
+            if not n_ok:
+                st.caption("Telegram alerts off — set `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` "
+                           "(env or config) to enable.")
+        if send:
+            res = notify_incident({
+                "severity": row.get("severity"), "event_cause": row.get("cause"),
+                "zone": row.get("zone"), "closure_prob": row.get("closure_prob"),
+                "personnel": row.get("personnel"), "dispatch_from": row.get("station"),
+                "barricade": bool(row.get("barricade")),
+                "diversion_summary": plan["summary"] if plan.get("feasible") else None,
+                "location": (lat, lon),
+            }, project_root=_ROOT)
+            if res.get("sent"):
+                st.success("📲 Alert sent to the officers' Telegram group.")
+            else:
+                st.error(f"Alert not sent: {res.get('reason', 'unknown error')}")
 
 st.caption(
     "Recommendations use the same rule engine as the Resource Plan; closure "
