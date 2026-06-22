@@ -38,6 +38,7 @@ from outcomes_log import log_decision  # noqa: E402
 from event_store import active_events, live_history, record_event  # noqa: E402
 from history_features import history_features  # noqa: E402
 from osm_features import road_context  # noqa: E402
+from hotspot_engine import assign_cluster  # noqa: E402
 from resource_recommender import clearance_range, recommend  # noqa: E402
 from utils import is_peak_hour  # noqa: E402
 
@@ -179,9 +180,14 @@ def handle_event(ev: Event):
             "recommended_personnel": rec["personnel_count"],
         }, project_root=_ROOT)
         # Record into the live event store so subsequent events get REAL history.
+        # Assign an online cluster from its location so it joins the right hotspot
+        # footprint on the Live Ops map (and its convex hull) without a re-run.
+        cluster = assign_cluster(ev.latitude, ev.longitude, project_root=_ROOT)
         record_event({
             "event_cause": ev.event_cause, "zone": ev.zone, "corridor": ev.corridor or None,
+            "latitude": ev.latitude, "longitude": ev.longitude,
             "severity": sev, "closure_prob": closure_prob, "status": "active",
+            "cluster": cluster,
         }, project_root=_ROOT)
 
     return {

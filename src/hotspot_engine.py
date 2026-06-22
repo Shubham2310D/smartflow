@@ -111,6 +111,71 @@ DBSCAN_MIN_SAMPLES = _DEFAULTS["dbscan_min_samples"]
 
 
 # ---------------------------------------------------------------------------
+# Online cluster assignment — give a NEW (e.g. real-time) incident a
+# cluster_label without re-running DBSCAN on the whole dataset.
+#
+# DBSCAN itself is batch; but for a live event we just need "does this point
+# fall inside an existing hotspot's footprint?". We precompute each cluster's
+# centroid and radius (from the committed features.csv) once, then snap a new
+# point to the nearest cluster it lies within. Outside every footprint → noise
+# (-1), exactly as DBSCAN would treat an isolated point.
+# ---------------------------------------------------------------------------
+
+_CENTROIDS_CACHE: list | None = None
+
+
+def _haversine_km(lat0: float, lon0: float, lats, lons):
+    R = _EARTH_RADIUS_KM
+    p0 = np.radians(lat0)
+    p = np.radians(lats)
+    dphi = np.radians(lats - lat0)
+    dl = np.radians(lons - lon0)
+    a = np.sin(dphi / 2) ** 2 + np.cos(p0) * np.cos(p) * np.sin(dl / 2) ** 2
+    return 2 * R * np.arcsin(np.sqrt(a))
+
+
+def cluster_centroids(project_root: Path | None = None) -> list[dict]:
+    """Centroid + footprint radius (km) per DBSCAN cluster, from features.csv. Cached."""
+    global _CENTROIDS_CACHE
+    if _CENTROIDS_CACHE is not None:
+        return _CENTROIDS_CACHE
+    root = project_root or Path(__file__).resolve().parents[1]
+    feats = root / "data" / "processed" / "features.csv"
+    if not feats.exists():
+        _CENTROIDS_CACHE = []
+        return _CENTROIDS_CACHE
+    df = pd.read_csv(feats, usecols=lambda c: c in {"latitude", "longitude", "cluster_label"})
+    df = df.dropna(subset=["latitude", "longitude", "cluster_label"])
+    out = []
+    for cid, g in df[df["cluster_label"] >= 0].groupby("cluster_label"):
+        clat, clon = float(g["latitude"].mean()), float(g["longitude"].mean())
+        d = _haversine_km(clat, clon, g["latitude"].to_numpy(), g["longitude"].to_numpy())
+        out.append({"cluster": int(cid), "lat": clat, "lon": clon,
+                    "radius_km": float(d.max()) if len(d) else 0.0})
+    _CENTROIDS_CACHE = out
+    return out
+
+
+def assign_cluster(lat: float | None, lon: float | None,
+                   project_root: Path | None = None, margin_km: float = 0.2) -> int:
+    """
+    Assign a new point to the nearest existing cluster whose footprint (radius +
+    a small margin) contains it; -1 (noise) if it's outside every cluster.
+    """
+    if lat is None or lon is None:
+        return -1
+    cents = cluster_centroids(project_root)
+    if not cents:
+        return -1
+    best, best_d = -1, float("inf")
+    for c in cents:
+        d = float(_haversine_km(c["lat"], c["lon"], np.array([lat]), np.array([lon]))[0])
+        if d <= c["radius_km"] + margin_km and d < best_d:
+            best, best_d = c["cluster"], d
+    return int(best)
+
+
+# ---------------------------------------------------------------------------
 # 1. DBSCAN clustering
 # ---------------------------------------------------------------------------
 

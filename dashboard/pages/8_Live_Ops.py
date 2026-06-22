@@ -39,7 +39,7 @@ _CLO   = _ROOT / "models" / "closure_predictor.pkl"
 _SEV_COLOR = {"High": "#dc3545", "Medium": "#fd7e14", "Low": "#28a745"}
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=10)
 def load_active():
     """Active events (rich features) + a live closure probability per event."""
     seed_from_features(_ROOT)                      # populate the store if empty
@@ -48,6 +48,20 @@ def load_active():
         return None, n_store
     df = pd.read_csv(_FEATS)
     df = df[df.get("status") == "active"].copy() if "status" in df.columns else df
+
+    # Merge LIVE incidents added through the API (event store rows that aren't
+    # already in features.csv) so real-time events show on the map and feed the
+    # convex hulls — without a pipeline re-run, and without double-counting the
+    # seeded batch rows (those share features.csv ids).
+    live = active_events(_ROOT)
+    if not live.empty:
+        known = set(df["id"].dropna()) if "id" in df.columns else set()
+        adds = live[~live["id"].isin(known)] if "id" in live.columns else live
+        if not adds.empty:
+            adds = adds.rename(columns={"severity": "severity_class",
+                                        "cluster": "cluster_label", "ts": "start_datetime"})
+            df = pd.concat([df, adds], ignore_index=True)
+
     if df.empty:
         return df, n_store
     if _CLO.exists():
@@ -62,6 +76,11 @@ def load_active():
 
 st.title("🛰️ Live Operations Console")
 st.caption("Active incidents, their recommended deployment, and barricade alerts — one operational pane.")
+
+if st.button("🔄 Refresh live data",
+             help="Pull the latest incidents, including ones just added via the real-time API."):
+    load_active.clear()
+    st.rerun()
 
 df, n_store = load_active()
 if df is None or df.empty:

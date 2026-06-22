@@ -47,9 +47,14 @@ def _conn(project_root: Path | None = None) -> sqlite3.Connection:
             severity      TEXT,
             closure_prob  REAL,
             status        TEXT,
+            cluster       INTEGER,     -- assigned DBSCAN cluster (online), -1 = noise
             logged_at     TEXT
         )
     """)
+    # Migrate older DBs that predate the `cluster` column.
+    existing = {row[1] for row in con.execute("PRAGMA table_info(events)").fetchall()}
+    if "cluster" not in existing:
+        con.execute("ALTER TABLE events ADD COLUMN cluster INTEGER")
     con.execute("CREATE INDEX IF NOT EXISTS ix_corridor ON events(corridor)")
     con.execute("CREATE INDEX IF NOT EXISTS ix_status ON events(status)")
     con.commit()
@@ -59,7 +64,8 @@ def _conn(project_root: Path | None = None) -> sqlite3.Connection:
 def record_event(rec: dict, project_root: Path | None = None) -> None:
     """Insert one event into the live store."""
     cols = ["id", "ts", "event_cause", "zone", "corridor", "junction",
-            "latitude", "longitude", "severity", "closure_prob", "status", "logged_at"]
+            "latitude", "longitude", "severity", "closure_prob", "status",
+            "cluster", "logged_at"]
     row = {c: rec.get(c) for c in cols}
     if not row.get("logged_at"):
         row["logged_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
