@@ -99,6 +99,7 @@ for _, r in df.iterrows():
         "personnel": rec["personnel_count"], "barricade": rec["barricade_required"],
         "station": rec["dispatch_from"], "closure_prob": cp,
         "impact": imp["score"], "impact_label": imp["label"],
+        "cluster": int(r.get("cluster_label", -1)) if pd.notna(r.get("cluster_label", -1)) else -1,
     })
 rdf = pd.DataFrame(recs)
 
@@ -125,6 +126,11 @@ left, right = st.columns([3, 2])
 
 with left:
     st.subheader("Active incident map")
+    show_hulls = st.checkbox(
+        "Show affected-area hulls (convex hull per active hotspot)", value=False,
+        help="Draws the convex hull around the active incidents in each spatial "
+             "cluster — the operational footprint to cordon and manage as one "
+             "zone. Per-cluster (not one city-wide hull), so it stays meaningful.")
     fmap = folium.Map(location=[df["latitude"].mean(), df["longitude"].mean()],
                       zoom_start=11, tiles="cartodbpositron")
     # Cap markers: thousands of CircleMarkers bloat the Folium HTML and memory.
@@ -146,6 +152,35 @@ with left:
                      f"Deploy {e['personnel']} from {e['station']}"
                      + (" · BARRICADE" if e["barricade"] else "")),
         ).add_to(fmap)
+
+    # Optional: convex hull per active spatial cluster = the affected footprint
+    # to cordon as one zone. Done PER CLUSTER (never one hull over the whole
+    # city, which would overstate the area — see hotspot_engine for that note).
+    if show_hulls and "cluster" in rdf.columns:
+        from scipy.spatial import ConvexHull  # noqa: PLC0415
+        # Hulls use ALL active incidents (not the capped marker set) so each
+        # footprint is complete; polygons are cheap, unlike thousands of markers.
+        hull_rows = rdf.dropna(subset=["lat", "lon"])
+        drawn = 0
+        for cid, grp in hull_rows[hull_rows["cluster"] >= 0].groupby("cluster"):
+            pts = grp[["lat", "lon"]].dropna().to_numpy()
+            if len(pts) < 3:
+                continue                      # a hull needs ≥3 points
+            try:
+                hull = ConvexHull(pts)        # raises if points are collinear
+            except Exception:
+                continue                      # degenerate cluster — skip
+            ring = [[float(pts[v, 0]), float(pts[v, 1])] for v in hull.vertices]
+            dom_sev = grp["severity"].mode().iloc[0] if len(grp) else "Medium"
+            folium.Polygon(
+                ring, color=_SEV_COLOR.get(dom_sev, "#666"), weight=2,
+                fill=True, fill_opacity=0.12,
+                tooltip=f"Active hotspot {int(cid)} · {len(grp)} incidents · cordon footprint",
+            ).add_to(fmap)
+            drawn += 1
+        if drawn == 0:
+            st.caption("No active cluster currently has ≥3 spread-out incidents to form a hull.")
+
     st_folium(fmap, width=None, height=460, returned_objects=[])
 
 with right:
