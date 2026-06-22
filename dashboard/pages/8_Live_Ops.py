@@ -272,6 +272,10 @@ else:
                       delta_color="inverse")
             m3.metric("Segments", plan["n_segments"])
 
+            show_div_hull = st.checkbox(
+                "Show diversion-affected area (convex hull)", value=True,
+                help="Convex hull over the reroute geometry — the area this diversion spans.")
+
             dmap = folium.Map(location=plan["blocked_point"], zoom_start=15,
                               tiles="cartodbpositron")
             folium.Marker(plan["blocked_point"], tooltip="Blockage",
@@ -279,6 +283,20 @@ else:
             folium.Circle(plan["blocked_point"], radius=plan["closure_radius_m"],
                           color="#dc3545", fill=True, fill_opacity=0.15,
                           tooltip="Closure zone").add_to(dmap)
+            # Convex hull over the detour + blockage = the area the diversion affects.
+            # Drawn under the route so the line stays crisp on top.
+            if show_div_hull:
+                from scipy.spatial import ConvexHull  # noqa: PLC0415
+                pts = [list(p) for p in plan["detour_path"]] + [list(plan["blocked_point"])]
+                if len(pts) >= 3:
+                    try:
+                        hull = ConvexHull(pts)          # raises if route is collinear
+                        ring = [pts[v] for v in hull.vertices]
+                        folium.Polygon(ring, color="#6f42c1", weight=2, fill=True,
+                                       fill_opacity=0.10,
+                                       tooltip="Diversion-affected area (convex hull)").add_to(dmap)
+                    except Exception:
+                        pass                            # degenerate route — skip the hull
             folium.PolyLine(plan["detour_path"], color="#1f77b4", weight=5, opacity=0.85,
                             tooltip=plan["summary"]).add_to(dmap)
             folium.Marker(plan["detour_path"][0], tooltip="Detour entry",
